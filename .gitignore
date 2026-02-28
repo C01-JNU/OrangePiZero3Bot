@@ -1,0 +1,49 @@
+# 构建文件
+build/
+*.o
+*.so
+*.a
+
+# IDE文件
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 编译产物
+bin/
+lib/
+
+# 临时文件
+*.tmp
+*.log
+logs/
+
+# 图像文件（使用通配符匹配所有图像格式）
+images/**/*.png
+images/**/*.jpg
+images/**/*.jpeg
+images/**/*.bmp
+images/**/*.tiff
+images/**/*.tif
+images/**/*.raw
+images/**/*.gif
+images/**/*.webp
+images/**/*.ico
+
+# 标定结果
+#calibration_results/*.yml
+#calibration_results/*.yaml
+#calibration_results/*.xml
+#我认为这个可以不忽略，先注释掉
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 备份文件
+*.bak
+*.backup
+
+# 本地配置文件
+.env

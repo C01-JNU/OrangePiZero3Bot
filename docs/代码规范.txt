@@ -1,0 +1,190 @@
+# OrangePiZero3-StereoDepth 项目代码规范
+**最后更新**：2026年2月12日  
+**适用版本**：重构完成后全线代码  
+**维护者**：C01-JNU & AI助手  
+
+---
+
+## 0. 总则
+1. **可读性优先**：代码是写给人看的，顺便给机器执行。
+2. **配置驱动**：所有可变参数必须来自`config/global_config.yaml`，禁止硬编码。
+3. **无C++异常**：完全禁用`try/catch/throw`，错误通过返回值/错误码传递。
+4. **Vulkan C API**：禁止使用`vulkan.hpp`，一律使用`vulkan.h`。
+5. **命名空间扁平化**：使用`namespace stereo_depth::vulkan`、`namespace stereo_depth::utils`等，禁止嵌套花括号。
+6. **C++17标准**：项目强制`-std=c++17`。
+
+---
+
+## 1. 命名规范
+
+### 1.1 文件命名
+- **头文件/源文件**：全小写，单词间用下划线分隔。  
+  ✅ `vulkan_context.h`、`stereo_pipeline.cpp`  
+  ❌ `VulkanContext.h`、`stereoPipeline.cpp`
+- **类定义文件**：类名与文件名保持映射关系。  
+  类`CameraDriver` → `camera_driver.h` / `camera_driver.cpp`
+
+### 1.2 函数命名
+- **普通函数/成员函数**：小驼峰。  
+  ✅ `calculateDisparity()`、`initVulkanDevice()`  
+- **布尔返回函数**：以`is`、`has`、`can`、`should`开头。  
+  ✅ `isCameraConnected()`、`hasInitialized()`
+- **私有成员函数**：同样使用小驼峰，无特殊前缀。
+
+### 1.3 变量命名
+- **局部变量**：小驼峰。  
+  ✅ `imageWidth`、`pixelIndex`
+- **成员变量**：前缀`m_` + 小驼峰。  
+  ✅ `m_deviceHandle`、`m_leftCpu`
+- **静态变量**：前缀`s_` + 小驼峰。  
+  ✅ `s_instanceCount`
+- **全局常量**：全大写，下划线分隔。  
+  ✅ `MAX_DISPARITY`、`WORKGROUP_X`
+- **宏**：全大写，下划线分隔。  
+  ✅ `CHECK(expr, msg)`、`IS_VALID_PIXEL(x,y)`
+
+### 1.4 类型命名（类/结构体/枚举）
+- **类/结构体**：大驼峰。  
+  ✅ `StereoMatcher`、`VulkanContext`
+- **枚举类型**：大驼峰，枚举值全大写。  
+  ```cpp
+  enum class LogLevel {
+      TRACE,
+      DEBUG,
+      INFO,
+      WARN,
+      ERROR
+  };
+  ```
+- **枚举值**：全大写，下划线分隔。  
+  ✅ `FLAG_USE_CENSUS`、`SPECKLE_RANGE`
+
+### 1.5 命名空间
+- **扁平化**：使用C++17连续作用域解析。  
+  ✅ `namespace stereo_depth::vulkan { ... }`  
+  ❌ `namespace stereo_depth { namespace vulkan { ... } }`
+- **utils**模块保留原风格（历史遗留），但新代码一律使用扁平风格。
+
+---
+
+## 2. 代码格式
+
+### 2.1 缩进
+- **4个空格**，禁止Tab。
+- 所有层级严格对齐。
+
+### 2.2 大括号
+- **左大括号不换行**，右大括号独占一行。
+  ```cpp
+  if (condition) {
+      // code
+  }
+  ```
+- **控制语句（if/for/while）必须使用大括号**，即使只有一行。
+  ✅ `if (valid) { return; }`  
+  ❌ `if (valid) return;`
+
+### 2.3 空格
+- 运算符两侧加空格。  
+  ✅ `a + b`、`c = d`
+- 逗号后加空格。  
+  ✅ `func(a, b, c)`
+- 控制语句关键词后加空格。  
+  ✅ `if (x)`、`for (int i = 0; i < n; ++i)`
+- 函数名与左括号间**不加空格**。  
+  ✅ `foo()`、`bar(1)`
+
+### 2.4 行长度
+- **不超过120字符**。
+- 超长时合理换行，对齐参数。
+
+### 2.5 指针与引用
+- `*`和`&`**紧贴变量名**。  
+  ✅ `uint32_t* ptr`、`const VulkanContext& ctx`  
+  ❌ `uint32_t *ptr`、`const VulkanContext &ctx`
+
+---
+
+## 3. 头文件规范
+
+### 3.1 包含保护
+- **所有头文件必须使用 `#pragma once`**，禁止宏定义形式的`#ifndef`。
+
+### 3.2 包含顺序
+1. 本头文件对应的源文件（仅`.cpp`中）。
+2. C系统头文件（`<stdio.h>`、`<stdlib.h>`等）。
+3. C++标准库头文件（`<vector>`、`<memory>`等）。
+4. 第三方库头文件（`vulkan/vulkan.h`、`opencv2/opencv.hpp`、`yaml-cpp/yaml.h`）。
+5. 项目内头文件（`utils/logger.hpp`、`vulkan/context.hpp`）。
+
+**每组之间空一行**。
+
+### 3.3 注释
+- **文件头注释**：每个头文件必须有，包含文件名、简要描述、最后更新、作者。
+  ```cpp
+  // vulkan_context.h
+  // Vulkan上下文管理，封装实例、设备、队列
+  // 最后更新: 2026-02-12
+  // 作者: C01-JNU
+  ```
+- **函数注释**：使用`/** */`风格，说明功能、参数、返回值、线程安全性（如有）。
+  ```cpp
+  /**
+   * @brief 创建立体匹配流水线
+   * @param camWidth 原始拼接图像宽度
+   * @param camHeight 原始拼接图像高度
+   * @param maxDisparity 最大视差
+   * @return 成功返回true，失败返回false
+   */
+  ```
+- **复杂逻辑行内注释**：解释“为什么”而非“是什么”。
+
+---
+
+## 4. 错误处理
+
+### 4.1 返回值
+- **成功返回`true`或`0`，失败返回`false`或负错误码**。
+- Vulkan API返回`VkResult`，必须检查并使用`CHECK`宏。
+  ```cpp
+  #define CHECK(expr, msg) \
+      do { if (!(expr)) { LOG_ERROR(msg); return false; } } while(0)
+  ```
+
+### 4.2 异常
+- **禁止使用C++异常**（`-fno-exceptions`）。
+- 所有错误通过返回值或输出参数传递。
+
+### 4.3 Vulkan错误处理
+- 对`vkCreate*`等函数，必须检查返回值并输出详细日志。
+- 统一使用`-13`等错误码映射表（在日志中输出字符串描述）。
+
+---
+
+## 5. 内存管理
+
+### 5.1 RAII原则
+- **所有资源必须封装在RAII类中**（构造函数获取，析构函数释放）。
+- Vulkan对象（`VkDevice`、`VkBuffer`等）必须由管理类（如`VulkanContext`、`BufferManager`）负责生命周期。
+
+### 5.2 智能指针
+- 动态分配的对象优先使用`std::unique_ptr`，必要时使用`std::shared_ptr`。
+- **禁止裸`new/delete`**（除Vulkan C API强制要求外）。
+
+## 6. 日志和调试
+
+### 6.1 日志级别
+| 级别 | 说明 |
+|------|------|
+| `TRACE` | 详细跟踪，仅开发调试 |
+| `DEBUG` | 调试信息，发布版本应关闭 |
+| `INFO`  | 一般信息，如初始化完成 |
+| `WARN`  | 警告，不影响运行但需关注 |
+| `ERROR` | 严重错误，功能不可用 |
+
+### 6.2 日志宏
+- 统一使用`utils/logger.hpp`提供的宏。
+  ```cpp
+  LOG_INFO("立体匹配流水线初始化完成，层数: {}", layers);
+  LOG_ERROR("创建管线失败: {}", errorString);
+  ```

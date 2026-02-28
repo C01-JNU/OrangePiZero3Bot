@@ -1,0 +1,1 @@
+stereo_calibration.yml这份标定文件是我使用CHUSEI 3D WebCam(一款廉价相机)拍摄的101张有效图像进行的标定，RMS约0.33
