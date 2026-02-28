@@ -83,8 +83,8 @@ set_target_properties(test_calibration PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
 )
 
-# 数据复制（对所有可执行文件）
-function(copy_data_to_target TARGET_NAME)
+# 定义辅助函数来复制公共数据（不含 calibration）
+function(copy_common_data TARGET_NAME)
     add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:${TARGET_NAME}>/config
         COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/config $<TARGET_FILE_DIR:${TARGET_NAME}>/config/
@@ -92,17 +92,41 @@ function(copy_data_to_target TARGET_NAME)
         COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/calibration_results $<TARGET_FILE_DIR:${TARGET_NAME}>/calibration_results/
         COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:${TARGET_NAME}>/images/test
         COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/images/test $<TARGET_FILE_DIR:${TARGET_NAME}>/images/test
-        COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:${TARGET_NAME}>/images/calibration
-        COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/images/calibration $<TARGET_FILE_DIR:${TARGET_NAME}>/images/calibration
         COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:${TARGET_NAME}>/images/output
-        COMMENT "Copying data to ${TARGET_NAME} directory"
+        COMMENT "Copying common data to ${TARGET_NAME} directory"
     )
 endfunction()
 
-copy_data_to_target(stereo_depth)
-copy_data_to_target(test_stereo_depth)
-copy_data_to_target(stereo_calibrator)
-copy_data_to_target(test_calibration)
+copy_common_data(stereo_depth)
+copy_common_data(test_stereo_depth)
+
+# 为 stereo_calibrator 额外复制 images/calibration
+add_custom_command(TARGET stereo_calibrator POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:stereo_calibrator>/config
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/config $<TARGET_FILE_DIR:stereo_calibrator>/config/
+    COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:stereo_calibrator>/calibration_results
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/calibration_results $<TARGET_FILE_DIR:stereo_calibrator>/calibration_results/
+    COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:stereo_calibrator>/images/test
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/images/test $<TARGET_FILE_DIR:stereo_calibrator>/images/test
+    COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:stereo_calibrator>/images/calibration
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/images/calibration $<TARGET_FILE_DIR:stereo_calibrator>/images/calibration
+    COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:stereo_calibrator>/images/output
+    COMMENT "Copying data to stereo_calibrator directory"
+)
+
+# 为 test_calibration 额外复制 images/calibration
+add_custom_command(TARGET test_calibration POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:test_calibration>/config
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/config $<TARGET_FILE_DIR:test_calibration>/config/
+    COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:test_calibration>/calibration_results
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/calibration_results $<TARGET_FILE_DIR:test_calibration>/calibration_results/
+    COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:test_calibration>/images/test
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/images/test $<TARGET_FILE_DIR:test_calibration>/images/test
+    COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:test_calibration>/images/calibration
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/images/calibration $<TARGET_FILE_DIR:test_calibration>/images/calibration
+    COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:test_calibration>/images/output
+    COMMENT "Copying data to test_calibration directory"
+)
 
 install(TARGETS stereo_depth DESTINATION bin)
 
