@@ -22,6 +22,7 @@ add_subdirectory(src/camera)
 add_subdirectory(src/calibration)
 add_subdirectory(src/cpu_stereo)
 add_subdirectory(src/utils)
+add_subdirectory(src/network)  # 新增网络模块
 
 # 主程序
 add_executable(stereo_depth src/main.cpp)
@@ -30,6 +31,7 @@ target_link_libraries(stereo_depth PRIVATE
     calibration_utils
     cpu_stereo
     utils
+    network  # 链接网络库
     ${OpenCV_LIBS}
     spdlog::spdlog_header_only
     yaml-cpp
@@ -46,6 +48,7 @@ target_link_libraries(test_stereo_depth PRIVATE
     calibration_utils
     cpu_stereo
     utils
+    network  # 链接网络库
     ${OpenCV_LIBS}
     spdlog::spdlog_header_only
     yaml-cpp
@@ -60,6 +63,7 @@ add_executable(stereo_calibrator src/calibration/stereo_calibrator_main.cpp)
 target_link_libraries(stereo_calibrator PRIVATE
     calibration_utils
     utils
+    network  # 链接网络库（可选，如果标定程序也需要调试传输可保留）
     ${OpenCV_LIBS}
     spdlog::spdlog_header_only
     yaml-cpp
@@ -74,6 +78,7 @@ add_executable(test_calibration src/calibration/test_calibration.cpp)
 target_link_libraries(test_calibration PRIVATE
     calibration_utils
     utils
+    network  # 链接网络库
     ${OpenCV_LIBS}
     spdlog::spdlog_header_only
     yaml-cpp

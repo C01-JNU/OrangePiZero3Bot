@@ -1,0 +1,232 @@
+# OrangePiZero3Bot 模块编写规范
+
+本文档指导AI(或开发者)为项目新增功能模块，确保代码风格统一、集成顺利、易于维护。在开始前，请先阅读项目根目录下的 `代码规范.txt`，遵循其中的命名、格式、错误处理等基本要求。
+
+---
+
+## 1. 模块目录结构
+
+每个独立模块应在以下位置创建对应的目录：
+
+- 头文件：`include/<模块名>/` （例如 `include/camera/`）
+- 源文件：`src/<模块名>/`   （例如 `src/camera/`）
+
+模块名使用全小写，单词间用下划线分隔（如 `cpu_stereo`、`calibration_loader`）。
+
+### 必须包含的文件
+
+- 至少一个头文件（`.h` 或 `.hpp`）和一个对应的源文件（`.cpp`）。
+- 一个 `CMakeLists.txt` 文件，定义模块的构建规则。
+
+---
+
+## 2. 头文件规范
+
+### 2.1 内容结构
+```cpp
+#pragma once
+
+#include <必要的标准库>
+#include <第三方库>
+#include "项目内相关头文件"
+
+namespace stereo_depth::模块名 {
+
+/**
+ * @brief 简要描述类的功能
+ */
+class 类名 {
+public:
+    类名();
+    ~类名();
+
+    // 禁止拷贝（除非需要，一般应禁止）
+    类名(const 类名&) = delete;
+    类名& operator=(const 类名&) = delete;
+
+    // 允许移动（可选）
+    类名(类名&&) = default;
+    类名& operator=(类名&&) = default;
+
+    // 公共接口
+    bool init(/*参数*/);
+    void process();
+
+private:
+    // 成员变量（前缀 m_）
+    int m_someValue;
+
+    // 私有方法
+    void helperFunction();
+};
+
+} // namespace stereo_depth::模块名
+```
+
+### 2.2 命名空间
+- 使用扁平化命名空间：`namespace stereo_depth::模块名`。
+- 不要在头文件中使用 `using namespace std;` 或 `using namespace cv;`，必须显式写全称。
+
+### 2.3 包含顺序
+按以下顺序分组，每组空一行：
+1. 本模块对应的头文件（仅在 `.cpp` 中）
+2. C 系统头文件（如 `<stdio.h>`）
+3. C++ 标准库头文件（如 `<vector>`）
+4. 第三方库头文件（如 `opencv2/opencv.hpp`、`yaml-cpp/yaml.h`）
+5. 项目内头文件（如 `utils/logger.hpp`）
+
+---
+
+## 3. 源文件规范
+
+- 必须包含对应的头文件作为第一行。
+- 函数实现前可添加简要注释。
+- 使用日志宏输出调试信息（`LOG_INFO`、`LOG_ERROR` 等），日志级别遵循 `代码规范.txt` 中的定义。
+
+---
+
+## 4. 类的设计原则
+
+### 4.1 RAII
+所有资源（文件句柄、网络 socket、Vulkan 对象等）必须在构造函数中获取，在析构函数中释放。避免裸 `new/delete`，优先使用智能指针。
+
+### 4.2 初始化
+推荐提供两个初始化接口：
+- `init(/*参数*/)`：执行可能失败的初始化操作，返回 `bool` 表示成功与否。
+- `isInitialized()`：检查是否已成功初始化。
+
+示例：
+```cpp
+class MyModule {
+public:
+    bool init(const Config& cfg);
+    bool isInitialized() const { return m_initialized; }
+private:
+    bool m_initialized = false;
+};
+```
+
+### 4.3 错误处理
+- 禁止 C++ 异常，所有错误通过返回值传递（`bool`、错误码或输出参数）。
+- 对于必须检查的 Vulkan/OpenCV 返回值，使用 `CHECK` 宏（参考 `代码规范.txt`）。
+
+---
+
+## 5. CMake 集成
+
+### 5.1 模块级 CMakeLists.txt
+在 `src/<模块名>/CMakeLists.txt` 中编写：
+```cmake
+add_library(<模块名>
+    源文件1.cpp
+    源文件2.cpp
+)
+target_include_directories(<模块名> PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../include
+)
+target_link_libraries(<模块名>
+    ${OpenCV_LIBS}
+    spdlog::spdlog_header_only
+    yaml-cpp
+    # 其他依赖库（如 utils）
+)
+set_target_properties(<模块名> PROPERTIES
+    CXX_STANDARD 17
+    CXX_STANDARD_REQUIRED ON
+)
+```
+如果模块依赖其他模块（如 `utils`），请在 `target_link_libraries` 中添加。
+
+### 5.2 顶层 CMakeLists.txt 集成
+在顶层 `CMakeLists.txt` 中添加：
+```cmake
+add_subdirectory(src/<模块名>)
+```
+如果主程序需要链接该模块，在 `target_link_libraries` 中添加模块名。
+
+---
+
+## 6. 配置文件使用
+
+所有可变参数必须通过 `utils::ConfigManager` 读取，禁止硬编码。
+
+### 6.1 定义配置结构
+在模块头文件中定义对应的配置结构体（如果需要）：
+```cpp
+struct MyModuleConfig {
+    int param1;
+    float param2;
+    bool loadFromConfig(const utils::Config& cfg);
+};
+```
+
+### 6.2 读取配置
+在初始化函数中：
+```cpp
+bool MyModule::init() {
+    auto& cfg = utils::ConfigManager::getInstance().getConfig();
+    m_param1 = cfg.get<int>("my_module.param1", 10);
+    m_param2 = cfg.get<float>("my_module.param2", 1.0f);
+    return true;
+}
+```
+配置文件应放在 `config/` 目录下，命名与模块相关（如 `my_module.yaml`），并在其中定义键值。
+
+---
+
+## 7. 日志使用
+
+- 包含 `utils/logger.hpp`。
+- 使用宏输出日志：`LOG_INFO("message {}", value);`
+- 日志级别：`TRACE`/`DEBUG`/`INFO`/`WARN`/`ERROR`/`CRITICAL`，根据信息重要程度选择。
+
+---
+
+## 8. 添加可执行程序
+
+如果模块需要独立的测试程序或工具，可以在 `src/<模块名>/` 下创建 `main_xxx.cpp`，并在模块的 `CMakeLists.txt` 中添加可执行文件：
+
+```cmake
+add_executable(my_tool my_tool_main.cpp)
+target_link_libraries(my_tool PRIVATE <模块名> utils ...)
+set_target_properties(my_tool PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
+)
+```
+然后在顶层 CMake 中无需额外操作（子目录已处理）。
+
+如果需要运行时配置文件或数据，参考现有 `copy_common_data` 函数，在顶层 `CMakeLists.txt` 中添加对应的复制命令。
+
+---
+
+## 9. 运行时文件
+
+如果模块需要特定的数据文件（如模型权重、配置文件），请确保它们被复制到可执行文件所在目录。项目提供了 `copy_common_data` 函数，可根据需要扩展。
+
+---
+
+## 10. 示例：参考现有模块
+
+- **camera**：摄像头抽象层，实现了 `CameraInterface` 和工厂模式。
+- **network**：UDP 传输模块，演示了多线程和分片发送。
+- **cpu_stereo**：立体匹配模块，展示了如何从配置创建 OpenCV 匹配器。
+- **calibration**：标定模块，包含复杂的 OpenCV 矩阵操作和文件 I/O。
+
+新增模块时可模仿这些模块的结构和风格。
+
+---
+
+## 11. 最终检查清单
+
+- [ ] 模块目录已创建，头文件和源文件分离。
+- [ ] 头文件包含 `#pragma once`，命名空间正确。
+- [ ] 类遵循 RAII，资源在析构中释放。
+- [ ] 错误通过返回值传递，无异常。
+- [ ] 配置文件参数已通过 `ConfigManager` 读取。
+- [ ] CMakeLists.txt 正确设置，模块编译通过。
+- [ ] 日志使用恰当，无多余输出。
+- [ ] 顶层 CMake 已添加子目录，主程序（如需）已链接。
+- [ ] 运行时文件（如有）已复制到输出目录。
+
+按照此规范编写的新模块将无缝融入现有项目，便于维护和复用。
