@@ -22,7 +22,8 @@
 #include "calibration/calibration_loader.hpp"
 #include "cpu_stereo/cpu_stereo_matcher.hpp"
 #include "camera/camera_factory.h"
-#include "network/udp_streamer.h"  // 网络模块头文件
+#include "network/udp_streamer.h"
+#include "utils/hardware_monitor.h"  // 新增：硬件监控
 
 using namespace stereo_depth::utils;
 using namespace stereo_depth;
@@ -102,23 +103,6 @@ cv::Mat computeDepth16U(const cv::Mat& disparity, double baseline, double focal_
 
 /**
  * @brief 处理一帧图像：校正、匹配、深度计算，并可选择保存结果
- * @param left_orig 左原始图像
- * @param right_orig 右原始图像
- * @param stitched_orig 拼接原始图像（用于保存原图）
- * @param rectifier 校正器指针
- * @param matcher 匹配器
- * @param baseline 基线长度（米）
- * @param focal_length 焦距（像素）
- * @param out_disparity_dir 视差图输出目录（仅当 save_images 为 true 时使用）
- * @param out_depth_dir 深度图输出目录
- * @param out_orig_dir 原图输出目录
- * @param prefix 文件名前缀
- * @param index 帧索引
- * @param save_images 是否保存图像到磁盘
- * @param out_left_rect 输出：校正后的左图
- * @param out_right_rect 输出：校正后的右图
- * @param out_disparity 输出：视差图（CV_16S）
- * @param out_depth16u 输出：深度图（CV_16U，毫米单位）
  */
 void processFrame(const cv::Mat& left_orig, const cv::Mat& right_orig,
                   const cv::Mat& stitched_orig,
@@ -178,9 +162,6 @@ void processFrame(const cv::Mat& left_orig, const cv::Mat& right_orig,
     } else {
         LOG_WARN("基线或焦距无效，无法计算深度图");
     }
-
-    // 注释掉每帧的INFO日志，减少输出
-    // LOG_INFO("帧 {} 处理完成，耗时 {:.2f} ms", index, matcher.getLastTimeMs());
 }
 
 int main() {
@@ -210,6 +191,43 @@ int main() {
             LOG_INFO("网络传输已启动");
         }
     }
+
+    // ========== 硬件监控初始化 ==========
+    HardwareMonitor hw_monitor;
+    if (!hw_monitor.initialize()) {
+        LOG_WARN("硬件监控初始化失败，将继续运行");
+    } else {
+        hw_monitor.start();
+        LOG_INFO("硬件监控已启动");
+    }
+    double hw_send_interval = cfg.get<double>("hardware_monitor.send_interval", 1.0);
+    int hw_stream_id = cfg.get<int>("hardware_monitor.stream_id", 4);
+    auto last_hw_send = std::chrono::steady_clock::now();
+
+    // 打包硬件状态的辅助函数
+    auto pack_hardware_status = [](const HardwareStatus& status) -> std::vector<uint8_t> {
+        std::vector<uint8_t> buffer;
+        auto append = [&](auto value) {
+            auto ptr = reinterpret_cast<const uint8_t*>(&value);
+            buffer.insert(buffer.end(), ptr, ptr + sizeof(value));
+        };
+        append(status.timestamp);
+        append(status.cpu_temp);
+        append(status.gpu_temp);
+        append(status.ddr_temp);
+        append(status.cpu_usage_percent);
+        append(status.memory_used_mb);
+        append(status.memory_total_mb);
+        append(status.swap_used_mb);
+        append(status.swap_total_mb);
+        append(status.uptime_seconds);
+        uint8_t flags = 0;
+        flags |= (status.cpu_temp_valid ? 1 : 0) << 0;
+        flags |= (status.gpu_temp_valid ? 1 : 0) << 1;
+        flags |= (status.ddr_temp_valid ? 1 : 0) << 2;
+        append(flags);
+        return buffer;
+    };
 
     int mode = 0;
     std::cout << "\n请选择模式:\n";
@@ -339,9 +357,19 @@ int main() {
                 if (!depth16u.empty()) {
                     streamer.sendFrame(2, depth16u, frame_count);
                 }
-                // 新增：发送原始拼接图（流ID=3）
                 streamer.sendFrame(3, stitched, frame_count);
                 LOG_DEBUG("网络发送帧 {}", frame_count);
+            }
+
+            // 定时发送硬件状态
+            if (hw_monitor.isRunning() && streamer.isRunning()) {
+                auto now = std::chrono::steady_clock::now();
+                if (now - last_hw_send >= std::chrono::duration<double>(hw_send_interval)) {
+                    auto status = hw_monitor.getLatestStatus();
+                    auto data = pack_hardware_status(status);
+                    streamer.sendData(hw_stream_id, data.data(), data.size());
+                    last_hw_send = now;
+                }
             }
 
             frame_count++;
@@ -356,7 +384,7 @@ int main() {
         capture_thread.join();
 
     } else {
-        // 批量处理模式：始终保存图片
+        // 批量处理模式
         std::string test_dir = exeDir + "/images/test";
         std::vector<std::string> image_files = listImageFiles(test_dir);
         if (image_files.empty()) {
@@ -389,12 +417,14 @@ int main() {
                          baseline, focal_length,
                          out_disparity, out_depth, out_orig,
                          "test", index,
-                         true,  // 始终保存
+                         true,
                          left_rect, right_rect, disparity, depth16u);
             index++;
         }
         LOG_INFO("批量处理完成，共处理 {} 帧", index);
     }
 
+    // 停止硬件监控
+    hw_monitor.stop();
     return 0;
 }

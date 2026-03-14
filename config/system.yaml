@@ -18,3 +18,10 @@ system:
   log_to_file: false
   # 日志文件路径（当 log_to_file 为 true 时有效）
   log_file_path: "logs/stereo_depth.log"
+
+# 硬件监控配置
+hardware_monitor:
+  enabled: true               # 是否启用（需在 main 中控制）
+  interval_seconds: 2.0       # 采集间隔（秒）
+  enable_gpu: true            # 是否尝试读取 GPU 温度
+  enable_ddr: true            # 是否尝试读取 DDR 温度

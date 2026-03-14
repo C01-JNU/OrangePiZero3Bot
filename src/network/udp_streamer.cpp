@@ -4,6 +4,7 @@
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include <cstring>
 #include <chrono>
 #include <thread>
@@ -87,6 +88,36 @@ bool UdpStreamer::sendFrame(int stream_id, const cv::Mat& image, uint64_t timest
     {
         std::lock_guard<std::mutex> lock(queue_mutex_);
         if (frame_queue_.size() >= 10) { // 限制队列长度
+            frame_queue_.pop();
+            dropped_frames_++;
+        }
+        frame_queue_.push(std::move(item));
+    }
+    queue_cv_.notify_one();
+    return true;
+}
+
+bool UdpStreamer::sendData(int stream_id, const void* data, size_t size, uint64_t timestamp) {
+    if (!initialized_ || !running_) {
+        LOG_WARN("流未启动，丢弃数据");
+        return false;
+    }
+
+    // 直接拷贝二进制数据
+    std::vector<uint8_t> buffer(static_cast<const uint8_t*>(data),
+                                 static_cast<const uint8_t*>(data) + size);
+
+    FrameItem item;
+    item.frame_id = next_frame_id_++;
+    item.stream_id = static_cast<uint16_t>(stream_id);
+    item.timestamp = timestamp ? timestamp : 
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+    item.data = std::move(buffer);
+
+    {
+        std::lock_guard<std::mutex> lock(queue_mutex_);
+        if (frame_queue_.size() >= 10) {
             frame_queue_.pop();
             dropped_frames_++;
         }

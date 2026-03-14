@@ -15,7 +15,7 @@ namespace network {
 /**
  * @brief UDP分片传输器
  * 
- * 将图像数据分片并通过UDP发送到指定IP和端口。
+ * 将图像数据或任意二进制数据分片并通过UDP发送到指定IP和端口。
  * 支持多流（通过不同端口区分），自动分片重组。
  */
 class UdpStreamer {
@@ -52,6 +52,16 @@ public:
     bool sendFrame(int stream_id, const cv::Mat& image, uint64_t timestamp = 0);
 
     /**
+     * @brief 发送任意二进制数据
+     * @param stream_id 流ID
+     * @param data 数据指针
+     * @param size 数据大小（字节）
+     * @param timestamp 时间戳（可选，默认0）
+     * @return 成功返回true
+     */
+    bool sendData(int stream_id, const void* data, size_t size, uint64_t timestamp = 0);
+
+    /**
      * @brief 启动发送线程
      */
     void start();
@@ -83,7 +93,7 @@ private:
         uint32_t frame_id;
         uint16_t stream_id;
         uint64_t timestamp;
-        std::vector<uint8_t> data; // 完整图像数据（已序列化）
+        std::vector<uint8_t> data; // 完整数据（已序列化）
     };
 
     void sendThreadFunc();
