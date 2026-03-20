@@ -1,0 +1,44 @@
+#version 450
+
+layout(local_size_x = 32, local_size_y = 32) in;
+
+layout(binding = 0, r8) uniform readonly image2D inputImage;
+layout(binding = 1, r16ui) uniform writeonly uimage2D outputImage;
+
+layout(push_constant) uniform PushConstants {
+    int windowWidth;
+    int windowHeight;
+    int imageWidth;
+    int imageHeight;
+} pc;
+
+void main() {
+    ivec2 pos = ivec2(gl_GlobalInvocationID.xy);
+    if (pos.x >= pc.imageWidth || pos.y >= pc.imageHeight) return;
+
+    int halfW = pc.windowWidth / 2;
+    int halfH = pc.windowHeight / 2;
+
+    if (pos.x < halfW || pos.x >= pc.imageWidth - halfW ||
+        pos.y < halfH || pos.y >= pc.imageHeight - halfH) {
+        imageStore(outputImage, pos, uvec4(0));
+        return;
+    }
+
+    float center = imageLoad(inputImage, pos).r;
+
+    uint code = 0;
+    int bit = 0;
+    for (int dy = -halfH; dy <= halfH; ++dy) {
+        for (int dx = -halfW; dx <= halfW; ++dx) {
+            if (dx == 0 && dy == 0) continue;
+            float neighbor = imageLoad(inputImage, pos + ivec2(dx, dy)).r;
+            if (neighbor < center) {
+                code |= (1u << bit);
+            }
+            bit++;
+        }
+    }
+
+    imageStore(outputImage, pos, uvec4(code));
+}

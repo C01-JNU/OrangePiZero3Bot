@@ -20,10 +20,10 @@
 #include "utils/config.hpp"
 #include "calibration/stereo_rectifier.hpp"
 #include "calibration/calibration_loader.hpp"
-#include "cpu_stereo/cpu_stereo_matcher.hpp"
+#include "census/census_transform.h"
 #include "camera/camera_factory.h"
 #include "network/udp_streamer.h"
-#include "utils/hardware_monitor.h"  // 新增：硬件监控
+#include "utils/hardware_monitor.h"
 
 using namespace stereo_depth::utils;
 using namespace stereo_depth;
@@ -82,40 +82,15 @@ bool ensureDirectory(const std::string& path) {
     return false;
 }
 
-cv::Mat computeDepth16U(const cv::Mat& disparity, double baseline, double focal_length) {
-    if (disparity.empty()) return cv::Mat();
-    cv::Mat depth16u(disparity.size(), CV_16U, cv::Scalar(0));
-    for (int y = 0; y < disparity.rows; ++y) {
-        for (int x = 0; x < disparity.cols; ++x) {
-            short d = disparity.at<short>(y, x);
-            if (d > 0) {
-                float disp_real = d / 16.0f;
-                float depth_m = static_cast<float>(baseline * focal_length / disp_real);
-                int depth_mm = static_cast<int>(depth_m * 1000.0f + 0.5f);
-                if (depth_mm > 0 && depth_mm < 65535) {
-                    depth16u.at<uint16_t>(y, x) = static_cast<uint16_t>(depth_mm);
-                }
-            }
-        }
-    }
-    return depth16u;
-}
-
-/**
- * @brief 处理一帧图像：校正、匹配、深度计算，并可选择保存结果
- */
 void processFrame(const cv::Mat& left_orig, const cv::Mat& right_orig,
                   const cv::Mat& stitched_orig,
                   calibration::StereoRectifier* rectifier,
-                  cpu_stereo::CpuStereoMatcher& matcher,
-                  double baseline, double focal_length,
-                  const std::string& out_disparity_dir,
-                  const std::string& out_depth_dir,
+                  census::CensusTransform& census,
                   const std::string& out_orig_dir,
                   const std::string& prefix, int index,
                   bool save_images,
                   cv::Mat& out_left_rect, cv::Mat& out_right_rect,
-                  cv::Mat& out_disparity, cv::Mat& out_depth16u) {
+                  cv::Mat& left_census, cv::Mat& right_census) {
 
     if (save_images) {
         std::string stitched_path = out_orig_dir + "/" + prefix + "_" + std::to_string(index) + "_stitched_orig.png";
@@ -141,33 +116,28 @@ void processFrame(const cv::Mat& left_orig, const cv::Mat& right_orig,
         out_right_rect = right_gray;
     }
 
-    out_disparity = matcher.compute(out_left_rect, out_right_rect);
-    if (out_disparity.empty()) {
-        LOG_ERROR("视差计算失败");
+    if (!census.compute(out_left_rect, left_census)) {
+        LOG_ERROR("左图 Census 变换失败");
+        return;
+    }
+    if (!census.compute(out_right_rect, right_census)) {
+        LOG_ERROR("右图 Census 变换失败");
         return;
     }
 
     if (save_images) {
-        std::string disp_path = out_disparity_dir + "/" + prefix + "_" + std::to_string(index) + "_disp.png";
-        cv::imwrite(disp_path, out_disparity);
-    }
-
-    if (baseline > 0 && focal_length > 0) {
-        out_depth16u = computeDepth16U(out_disparity, baseline, focal_length);
-        if (!out_depth16u.empty() && save_images) {
-            std::string depth_path = out_depth_dir + "/" + prefix + "_" + std::to_string(index) + "_depth.png";
-            cv::imwrite(depth_path, out_depth16u);
-            LOG_DEBUG("深度图已保存: {}", depth_path);
-        }
-    } else {
-        LOG_WARN("基线或焦距无效，无法计算深度图");
+        std::string left_census_path = out_orig_dir + "/" + prefix + "_" + std::to_string(index) + "_left_census.png";
+        cv::imwrite(left_census_path, left_census);
+        std::string right_census_path = out_orig_dir + "/" + prefix + "_" + std::to_string(index) + "_right_census.png";
+        cv::imwrite(right_census_path, right_census);
+        LOG_DEBUG("Census 图已保存: {} 和 {}", left_census_path, right_census_path);
     }
 }
 
 int main() {
     Logger::initialize("stereo_test", spdlog::level::info);
     LOG_INFO("=========================================");
-    LOG_INFO("  OrangePiZero3-StereoDepth 测试程序");
+    LOG_INFO("  OrangePiZero3-StereoDepth 测试程序 (Census 版)");
     LOG_INFO("=========================================");
 
     std::string exeDir = getExeDir();
@@ -180,7 +150,7 @@ int main() {
     }
     const auto& cfg = cfg_mgr.getConfig();
 
-    // 初始化网络传输模块（从配置文件读取）
+    // 初始化网络传输模块
     network::UdpStreamer streamer;
     bool network_enabled = cfg.get<bool>("network.enabled", false);
     if (network_enabled) {
@@ -192,7 +162,7 @@ int main() {
         }
     }
 
-    // ========== 硬件监控初始化 ==========
+    // 硬件监控初始化
     HardwareMonitor hw_monitor;
     if (!hw_monitor.initialize()) {
         LOG_WARN("硬件监控初始化失败，将继续运行");
@@ -204,7 +174,6 @@ int main() {
     int hw_stream_id = cfg.get<int>("hardware_monitor.stream_id", 4);
     auto last_hw_send = std::chrono::steady_clock::now();
 
-    // 打包硬件状态的辅助函数
     auto pack_hardware_status = [](const HardwareStatus& status) -> std::vector<uint8_t> {
         std::vector<uint8_t> buffer;
         auto append = [&](auto value) {
@@ -251,39 +220,31 @@ int main() {
     if (use_correction) {
         std::string calib_file = cfg.get<std::string>("calibration.calibration_file", "calibration_results/stereo_calibration.yml");
         std::string calibPath = exeDir + "/" + calib_file;
-        calibration::CalibrationParams params;
-        calibration::CalibrationLoader loader;
-        if (loader.loadFromFile(calibPath, params)) {
-            rectifier = std::make_unique<calibration::StereoRectifier>();
-            if (rectifier->initialize(params, calibration::RectificationMode::SCALE_TO_FIT)) {
-                LOG_INFO("立体校正器初始化成功");
-                baseline = params.baseline_meters;
-                if (!params.camera_matrix_left.empty()) {
-                    focal_length = params.camera_matrix_left.at<double>(0, 0);
-                }
-                LOG_INFO("基线: {:.3f} m, 焦距: {:.1f} px", baseline, focal_length);
-            } else {
-                LOG_ERROR("立体校正器初始化失败，将不使用校正");
-                rectifier = nullptr;
+        rectifier = std::make_unique<calibration::StereoRectifier>();
+        if (rectifier->loadAndInitialize(calibPath, calibration::RectificationMode::CROP_ONLY)) {
+            LOG_INFO("立体校正器初始化成功 (CROP_ONLY)");
+            auto params = rectifier->getCalibrationParams();
+            baseline = params.baseline_meters;
+            if (!params.camera_matrix_left.empty()) {
+                focal_length = params.camera_matrix_left.at<double>(0, 0);
             }
+            LOG_INFO("基线: {:.3f} m, 焦距: {:.1f} px", baseline, focal_length);
         } else {
-            LOG_ERROR("加载标定文件失败，将不使用校正");
+            LOG_ERROR("立体校正器初始化失败，将不使用校正");
+            rectifier = nullptr;
         }
     }
 
-    cpu_stereo::CpuStereoMatcher matcher;
-    if (!matcher.initializeFromConfig()) {
-        LOG_ERROR("CPU 匹配器初始化失败");
-        return -1;
+    // 初始化 Census 变换
+    census::CensusTransform censusTransform;
+    if (!censusTransform.initializeFromConfig()) {
+        LOG_WARN("Census 从配置文件初始化失败，使用默认 5x5 窗口");
+        censusTransform.initialize(5);
     }
 
     std::string base_out = exeDir + "/images/output";
-    std::string out_disparity = base_out + "/disparity";
-    std::string out_depth = base_out + "/depth";
     std::string out_orig = base_out + "/original";
     ensureDirectory(base_out);
-    ensureDirectory(out_disparity);
-    ensureDirectory(out_depth);
     ensureDirectory(out_orig);
 
     if (mode == 1) {
@@ -341,27 +302,24 @@ int main() {
             cv::Mat stitched;
             cv::hconcat(left, right, stitched);
 
-            cv::Mat left_rect, right_rect, disparity, depth16u;
+            cv::Mat left_rect, right_rect;
+            cv::Mat left_census, right_census;
             bool save_images = !streamer.isRunning();
             processFrame(left, right, stitched,
-                         rectifier.get(), matcher,
-                         baseline, focal_length,
-                         out_disparity, out_depth, out_orig,
-                         "cam", frame_count,
+                         rectifier.get(), censusTransform,
+                         out_orig, "cam", frame_count,
                          save_images,
-                         left_rect, right_rect, disparity, depth16u);
+                         left_rect, right_rect,
+                         left_census, right_census);
 
             if (streamer.isRunning()) {
                 streamer.sendFrame(0, left_rect, frame_count);
-                streamer.sendFrame(1, disparity, frame_count);
-                if (!depth16u.empty()) {
-                    streamer.sendFrame(2, depth16u, frame_count);
-                }
+                streamer.sendFrame(1, left_census, frame_count);
+                streamer.sendFrame(2, right_census, frame_count);
                 streamer.sendFrame(3, stitched, frame_count);
                 LOG_DEBUG("网络发送帧 {}", frame_count);
             }
 
-            // 定时发送硬件状态
             if (hw_monitor.isRunning() && streamer.isRunning()) {
                 auto now = std::chrono::steady_clock::now();
                 if (now - last_hw_send >= std::chrono::duration<double>(hw_send_interval)) {
@@ -384,7 +342,6 @@ int main() {
         capture_thread.join();
 
     } else {
-        // 批量处理模式
         std::string test_dir = exeDir + "/images/test";
         std::vector<std::string> image_files = listImageFiles(test_dir);
         if (image_files.empty()) {
@@ -411,20 +368,18 @@ int main() {
             cv::Mat left_orig = resized(cv::Rect(0, 0, single_width, height)).clone();
             cv::Mat right_orig = resized(cv::Rect(single_width, 0, single_width, height)).clone();
 
-            cv::Mat left_rect, right_rect, disparity, depth16u;
+            cv::Mat left_rect, right_rect, left_census, right_census;
             processFrame(left_orig, right_orig, resized,
-                         rectifier.get(), matcher,
-                         baseline, focal_length,
-                         out_disparity, out_depth, out_orig,
-                         "test", index,
+                         rectifier.get(), censusTransform,
+                         out_orig, "test", index,
                          true,
-                         left_rect, right_rect, disparity, depth16u);
+                         left_rect, right_rect,
+                         left_census, right_census);
             index++;
         }
         LOG_INFO("批量处理完成，共处理 {} 帧", index);
     }
 
-    // 停止硬件监控
     hw_monitor.stop();
     return 0;
 }

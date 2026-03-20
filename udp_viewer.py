@@ -4,7 +4,7 @@
 """
 OrangePi Zero3 立体视觉上位机（硬件监控版）
 功能：
-- 左侧2x2网格显示：左校正图（流0）、原始拼接图（流3）、视差图（流1）、深度图（流2）
+- 左侧2x2网格显示：左校正图（流0）、左眼Census图（流1）、右眼Census图（流2）、原始拼接图（流3）
 - 右侧面板：硬件状态列表 + 折线图（CPU温度、CPU占用率）
 - 全局保存开关和目录选择
 - 基端口可动态修改
@@ -28,8 +28,8 @@ DEFAULT_BASE_PORT = 5000
 BUFFER_SIZE = 65536
 
 STREAM_LEFT = 0      # 左校正图
-STREAM_DISPARITY = 1 # 视差图
-STREAM_DEPTH = 2     # 深度图
+STREAM_DISPARITY = 1 # 左眼Census图
+STREAM_DEPTH = 2     # 右眼Census图
 STREAM_STITCHED = 3  # 原始拼接图
 STREAM_HARDWARE = 4  # 硬件状态
 
@@ -119,11 +119,14 @@ def decode_image_from_bytes(data):
         rows, cols, img_type = struct.unpack(header_fmt, data[:header_size])
         img_data = data[header_size:]
 
+        # OpenCV 类型映射 (CV_8U, CV_8UC3, CV_16U, CV_16S, CV_32S, CV_64F)
         type_map = {
             0: (np.uint8, 1),   # CV_8UC1
             16: (np.uint8, 3),  # CV_8UC3
             2: (np.uint16, 1),  # CV_16UC1
             3: (np.int16, 1),   # CV_16SC1
+            4: (np.int32, 1),   # CV_32SC1
+            6: (np.float64, 1), # CV_64FC1
         }
         if img_type not in type_map:
             print(f"不支持的图像类型: {img_type}")
@@ -263,32 +266,30 @@ class EmbeddedView:
         self.image_label.image = imgtk
 
     def prepare_display(self, img):
-        if len(img.shape) == 2:
+        """将各种类型的图像转换为 RGB 8位用于显示"""
+        if len(img.shape) == 2:  # 单通道
+            # 已经是 8 位灰度
             if img.dtype == np.uint8:
                 return cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
-            elif img.dtype == np.uint16:
-                valid = img > 0
-                if np.any(valid):
-                    minv, maxv = img[valid].min(), img[valid].max()
-                    if maxv > minv:
-                        norm = ((img.astype(np.float32)-minv)/(maxv-minv)*255).clip(0,255).astype(np.uint8)
+            # 其他整数或浮点类型：归一化到 0-255
+            else:
+                # 处理可能存在的无效区域（如边界零值）
+                if np.issubdtype(img.dtype, np.integer):
+                    # 整数类型：直接使用全图范围归一化
+                    minv, maxv = img.min(), img.max()
+                else:
+                    # 浮点类型：忽略 NaN
+                    valid = ~np.isnan(img)
+                    if np.any(valid):
+                        minv, maxv = img[valid].min(), img[valid].max()
                     else:
-                        norm = np.zeros_like(img, dtype=np.uint8)
+                        minv, maxv = 0, 1
+                if maxv > minv:
+                    norm = ((img.astype(np.float32) - minv) / (maxv - minv) * 255).clip(0, 255).astype(np.uint8)
                 else:
                     norm = np.zeros_like(img, dtype=np.uint8)
                 return cv2.cvtColor(norm, cv2.COLOR_GRAY2RGB)
-            elif img.dtype == np.int16:
-                positive = img > 0
-                if np.any(positive):
-                    minv, maxv = img[positive].min(), img[positive].max()
-                    if maxv > minv:
-                        norm = ((img.astype(np.float32)-minv)/(maxv-minv)*255).clip(0,255).astype(np.uint8)
-                    else:
-                        norm = np.zeros_like(img, dtype=np.uint8)
-                else:
-                    norm = np.zeros_like(img, dtype=np.uint8)
-                return cv2.cvtColor(norm, cv2.COLOR_GRAY2RGB)
-        else:
+        else:  # 三通道（BGR）
             return cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
     def save_image(self, img, frame_id, timestamp):
@@ -530,28 +531,21 @@ class ImageWindow(tk.Toplevel):
         self.title(f"流 {self.stream_id} (端口 {self.port}) 帧:{self.last_frame_id}")
 
     def prepare_display(self, img):
+        """与 EmbeddedView 相同的显示处理"""
         if len(img.shape) == 2:
             if img.dtype == np.uint8:
                 return cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
-            elif img.dtype == np.uint16:
-                valid = img > 0
-                if np.any(valid):
-                    minv, maxv = img[valid].min(), img[valid].max()
-                    if maxv > minv:
-                        norm = ((img.astype(np.float32)-minv)/(maxv-minv)*255).clip(0,255).astype(np.uint8)
-                    else:
-                        norm = np.zeros_like(img, dtype=np.uint8)
+            else:
+                if np.issubdtype(img.dtype, np.integer):
+                    minv, maxv = img.min(), img.max()
                 else:
-                    norm = np.zeros_like(img, dtype=np.uint8)
-                return cv2.cvtColor(norm, cv2.COLOR_GRAY2RGB)
-            elif img.dtype == np.int16:
-                positive = img > 0
-                if np.any(positive):
-                    minv, maxv = img[positive].min(), img[positive].max()
-                    if maxv > minv:
-                        norm = ((img.astype(np.float32)-minv)/(maxv-minv)*255).clip(0,255).astype(np.uint8)
+                    valid = ~np.isnan(img)
+                    if np.any(valid):
+                        minv, maxv = img[valid].min(), img[valid].max()
                     else:
-                        norm = np.zeros_like(img, dtype=np.uint8)
+                        minv, maxv = 0, 1
+                if maxv > minv:
+                    norm = ((img.astype(np.float32) - minv) / (maxv - minv) * 255).clip(0, 255).astype(np.uint8)
                 else:
                     norm = np.zeros_like(img, dtype=np.uint8)
                 return cv2.cvtColor(norm, cv2.COLOR_GRAY2RGB)
@@ -627,9 +621,9 @@ class StereoViewerApp:
         self.views = []
         view_configs = [
             (STREAM_LEFT, "左校正图"),
-            (STREAM_STITCHED, "原始拼接图"),
-            (STREAM_DISPARITY, "视差图"),
-            (STREAM_DEPTH, "深度图")
+            (STREAM_DISPARITY, "左眼Census图"),
+            (STREAM_DEPTH, "右眼Census图"),
+            (STREAM_STITCHED, "原始拼接图")
         ]
         positions = [(0,0), (0,1), (1,0), (1,1)]
         for (sid, name), (row, col) in zip(view_configs, positions):

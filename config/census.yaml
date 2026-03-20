@@ -1,0 +1,11 @@
+# Census 变换配置
+census:
+  window_width: 5        # 窗口宽度（奇数）
+  window_height: 3       # 窗口高度（奇数）
+  workgroup_size_x: 32   # GPU 工作组宽度（需与着色器 local_size_x 一致）
+  workgroup_size_y: 32   # GPU 工作组高度（需与着色器 local_size_y 一致）
+
+  # 滤波类型: "none", "gaussian", "median"
+  filter_type: "median"          # 使用中值滤波
+  filter_kernel_size: 3          # 滤波核大小（奇数）
+  filter_sigma: 0.5              # 标准差（仅用于高斯滤波）

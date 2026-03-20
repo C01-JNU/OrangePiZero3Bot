@@ -30,17 +30,17 @@ int main(int argc, char** argv) {
     std::string calibration_file = (argc >= 2) ? argv[1] : (exeDir + "/calibration_results/stereo_calibration.yml");
     std::string test_image_dir   = (argc >= 3) ? argv[2] : (exeDir + "/images/test");
     std::string output_dir        = (argc >= 4) ? argv[3] : (exeDir + "/images/calibrated");
-    std::string mode_str          = (argc >= 5) ? argv[4] : "scale_to_fit";
+    std::string mode_str          = (argc >= 5) ? argv[4] : "crop_only";
     bool save_comparison = (argc >= 6) ? (std::string(argv[5]) == "true") : true;
     
     // 解析校正模式
     stereo_depth::calibration::RectificationMode mode;
     if (mode_str == "raw") {
         mode = stereo_depth::calibration::RectificationMode::RAW;
-    } else if (mode_str == "crop_only") {
-        mode = stereo_depth::calibration::RectificationMode::CROP_ONLY;
-    } else {
+    } else if (mode_str == "scale_to_fit") {
         mode = stereo_depth::calibration::RectificationMode::SCALE_TO_FIT;
+    } else {
+        mode = stereo_depth::calibration::RectificationMode::CROP_ONLY;  // 默认
     }
     
     // 显示帮助
@@ -51,12 +51,12 @@ int main(int argc, char** argv) {
         std::cout << "  calibration_file: 标定YAML文件路径 (默认: " << exeDir << "/calibration_results/stereo_calibration.yml)\n";
         std::cout << "  test_image_dir: 测试图像目录 (默认: " << exeDir << "/images/test)\n";
         std::cout << "  output_dir: 输出目录 (默认: " << exeDir << "/images/calibrated)\n";
-        std::cout << "  mode: 校正模式 - raw, crop_only, scale_to_fit (默认: scale_to_fit)\n";
+        std::cout << "  mode: 校正模式 - raw, crop_only, scale_to_fit (默认: crop_only)\n";
         std::cout << "  save_comparison: 是否保存对比图 - true/false (默认: true)\n";
         return 0;
     }
     
-    LOG_INFO("=== 立体校正测试程序 (方案2) ===");
+    LOG_INFO("=== 立体校正测试程序 ===");
     LOG_INFO("标定文件: {}", calibration_file);
     LOG_INFO("测试图像目录: {}", test_image_dir);
     LOG_INFO("输出目录: {}", output_dir);
@@ -65,7 +65,15 @@ int main(int argc, char** argv) {
     
     // 1. 初始化立体校正器
     stereo_depth::calibration::StereoRectifier rectifier;
-    if (!rectifier.loadAndInitialize(calibration_file, mode)) {
+    stereo_depth::calibration::CalibrationParams params;
+    stereo_depth::calibration::CalibrationLoader loader;
+    
+    if (!loader.loadFromFile(calibration_file, params)) {
+        LOG_ERROR("加载标定文件失败");
+        return -1;
+    }
+    
+    if (!rectifier.initialize(params, mode)) {
         LOG_ERROR("初始化立体校正器失败");
         return -1;
     }
@@ -145,11 +153,10 @@ int main(int argc, char** argv) {
                 cv::resize(right_raw, right_raw, expected_size);
             }
             
-            // 执行立体校正（使用指定模式）
+            // 执行立体校正（不再需要传入 mode 参数，使用对象当前模式）
             cv::Mat left_rectified, right_rectified;
             if (!rectifier.rectifyPair(left_raw, right_raw, 
-                                       left_rectified, right_rectified,
-                                       mode)) {
+                                        left_rectified, right_rectified)) {
                 LOG_ERROR("校正图像失败");
                 continue;
             }
