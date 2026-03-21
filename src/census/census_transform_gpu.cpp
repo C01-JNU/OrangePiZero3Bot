@@ -11,6 +11,7 @@
 #include <unistd.h>
 #include <limits.h>
 #include <libgen.h>
+#include <cmath>
 
 namespace stereo_depth::census {
 
@@ -54,11 +55,16 @@ struct CensusTransform::GpuResources {
 
     bool layoutInitialized = false;
 
-    // 三重暂存缓冲区
     VkBuffer stagingBuffers[3] = {VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE};
     VkDeviceMemory stagingMemories[3] = {VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE};
     size_t stagingSize = 0;
     int currentStaging = 0;
+
+    // 权重表 uniform buffer
+    VkBuffer weightBuffer = VK_NULL_HANDLE;
+    VkDeviceMemory weightMemory = VK_NULL_HANDLE;
+    size_t weightSize = 0;
+    int currentBilateralD = 0;      // 用于检测参数变化
 
     uint32_t imageWidth = 0;
     uint32_t imageHeight = 0;
@@ -214,12 +220,23 @@ struct CensusTransform::GpuResources {
     }
 
     bool dispatchCompute(VkCommandBuffer cmd, uint32_t width, uint32_t height,
-                         int win_w, int win_h, int wg_x, int wg_y) {
+                         int win_w, int win_h, int wg_x, int wg_y,
+                         int adaptive_thresh, int filter_type,
+                         int bilateral_d, float sigma_color, float sigma_space) {
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
                                 pipelineLayout, 0, 1, &descriptorSet, 0, nullptr);
-        struct PushConstants { int ww; int wh; int iw; int ih; } pc = {win_w, win_h, (int)width, (int)height};
-        vkCmdPushConstants(cmd, pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
+
+        struct PushConstants {
+            int ww, wh, iw, ih;
+            int thresh;
+            int ftype;
+            int d;               // 双边滤波直径
+            float scolor;
+            float sspace;
+        } pc = {win_w, win_h, (int)width, (int)height, adaptive_thresh, filter_type, bilateral_d, sigma_color, sigma_space};
+        vkCmdPushConstants(cmd, pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT,
+                           0, sizeof(PushConstants), &pc);
 
         uint32_t groupX = (width + wg_x - 1) / wg_x;
         uint32_t groupY = (height + wg_y - 1) / wg_y;
@@ -236,6 +253,8 @@ struct CensusTransform::GpuResources {
                 if (stagingBuffers[i]) vkDestroyBuffer(device, stagingBuffers[i], nullptr);
                 if (stagingMemories[i]) vkFreeMemory(device, stagingMemories[i], nullptr);
             }
+            if (weightBuffer) vkDestroyBuffer(device, weightBuffer, nullptr);
+            if (weightMemory) vkFreeMemory(device, weightMemory, nullptr);
             if (sampler) vkDestroySampler(device, sampler, nullptr);
             if (outputImageView) vkDestroyImageView(device, outputImageView, nullptr);
             if (inputImageView) vkDestroyImageView(device, inputImageView, nullptr);
@@ -380,7 +399,8 @@ bool CensusTransform::initGPU() {
         return false;
     }
 
-    std::array<VkDescriptorSetLayoutBinding, 2> bindings{};
+    // 描述符集布局：binding0 输入图像，binding1 输出图像，binding2 权重表
+    std::array<VkDescriptorSetLayoutBinding, 3> bindings{};
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     bindings[0].descriptorCount = 1;
@@ -389,6 +409,10 @@ bool CensusTransform::initGPU() {
     bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     bindings[1].descriptorCount = 1;
     bindings[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    bindings[2].binding = 2;
+    bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    bindings[2].descriptorCount = 1;
+    bindings[2].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
 
     VkDescriptorSetLayoutCreateInfo dslci{};
     dslci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -400,11 +424,14 @@ bool CensusTransform::initGPU() {
         return false;
     }
 
-    std::array<VkDescriptorPoolSize, 2> psizes{};
+    // 描述符池
+    std::array<VkDescriptorPoolSize, 3> psizes{};
     psizes[0].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     psizes[0].descriptorCount = 1;
     psizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     psizes[1].descriptorCount = 1;
+    psizes[2].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    psizes[2].descriptorCount = 1;
     VkDescriptorPoolCreateInfo dpci{};
     dpci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     dpci.poolSizeCount = (uint32_t)psizes.size();
@@ -427,11 +454,11 @@ bool CensusTransform::initGPU() {
         return false;
     }
 
+    // 创建管线布局
     VkPushConstantRange pcr{};
     pcr.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
     pcr.offset = 0;
-    pcr.size = sizeof(int) * 4;
-
+    pcr.size = sizeof(int)*7 + sizeof(float)*2; // 7个int + 2个float
     VkPipelineLayoutCreateInfo plci{};
     plci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     plci.setLayoutCount = 1;
@@ -444,6 +471,7 @@ bool CensusTransform::initGPU() {
         return false;
     }
 
+    // 加载着色器
     std::string exeDir = getExeDir();
     std::string shaderPath = exeDir + "/shaders/census.comp.spv";
     std::vector<char> shaderCode;
@@ -461,14 +489,14 @@ bool CensusTransform::initGPU() {
         return false;
     }
 
-    VkComputePipelineCreateInfo cpci2{};
-    cpci2.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-    cpci2.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    cpci2.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
-    cpci2.stage.module = m_gpu->shaderModule;
-    cpci2.stage.pName = "main";
-    cpci2.layout = m_gpu->pipelineLayout;
-    if (!GpuResources::checkResult(vkCreateComputePipelines(m_gpu->device, VK_NULL_HANDLE, 1, &cpci2, nullptr, &m_gpu->pipeline), "Create compute pipeline")) {
+    VkComputePipelineCreateInfo pipelineInfo{};
+    pipelineInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+    pipelineInfo.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    pipelineInfo.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+    pipelineInfo.stage.module = m_gpu->shaderModule;
+    pipelineInfo.stage.pName = "main";
+    pipelineInfo.layout = m_gpu->pipelineLayout;
+    if (!GpuResources::checkResult(vkCreateComputePipelines(m_gpu->device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &m_gpu->pipeline), "Create compute pipeline")) {
         delete m_gpu;
         m_gpu = nullptr;
         return false;
@@ -479,6 +507,26 @@ bool CensusTransform::initGPU() {
     return true;
 }
 
+// 辅助函数：计算双边滤波权重表（空间权重表大小随直径变化）
+static void computeWeightTables(float* spatialWeights, float* colorWeights,
+                                int bilateral_d,
+                                float sigmaSpace, float sigmaColor) {
+    int radius = bilateral_d / 2;
+    int total = bilateral_d * bilateral_d;
+    float invSpaceVar = 1.0f / (2.0f * sigmaSpace * sigmaSpace);
+    float invColorVar = 1.0f / (2.0f * sigmaColor * sigmaColor);
+    int idx = 0;
+    for (int dy = -radius; dy <= radius; ++dy) {
+        for (int dx = -radius; dx <= radius; ++dx) {
+            float dist2 = dx*dx + dy*dy;
+            spatialWeights[idx++] = exp(-dist2 * invSpaceVar);
+        }
+    }
+    for (int d = 0; d < 256; ++d) {
+        colorWeights[d] = exp(-d*d * invColorVar);
+    }
+}
+
 bool CensusTransform::computeGPU(const cv::Mat& src, cv::Mat& dst) {
     if (!m_gpu || !m_gpu->device) {
         LOG_ERROR("GPU not initialized");
@@ -486,10 +534,9 @@ bool CensusTransform::computeGPU(const cv::Mat& src, cv::Mat& dst) {
     }
 
     uint32_t w = src.cols, h = src.rows;
-    size_t imageSize = w * h;                     // 输入 1 字节/像素
-    size_t outputSize = w * h * sizeof(uint16_t); // 输出 2 字节/像素
+    size_t imageSize = w * h;
+    size_t outputSize = w * h * sizeof(uint16_t);
 
-    // 图像尺寸变化时重建资源
     if (m_gpu->imageWidth != w || m_gpu->imageHeight != h) {
         if (m_gpu->inputImage) vkDestroyImage(m_gpu->device, m_gpu->inputImage, nullptr);
         if (m_gpu->inputImageMemory) vkFreeMemory(m_gpu->device, m_gpu->inputImageMemory, nullptr);
@@ -521,26 +568,50 @@ bool CensusTransform::computeGPU(const cv::Mat& src, cv::Mat& dst) {
                                      m_gpu->stagingBuffers[i], m_gpu->stagingMemories[i])) return false;
         }
 
-        VkDescriptorImageInfo inputInfo{};
-        inputInfo.sampler = m_gpu->sampler;
-        inputInfo.imageView = m_gpu->inputImageView;
-        inputInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-        VkDescriptorImageInfo outputInfo{};
-        outputInfo.sampler = m_gpu->sampler;
-        outputInfo.imageView = m_gpu->outputImageView;
-        outputInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-
-        VkWriteDescriptorSet writes[2];
-        writes[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, m_gpu->descriptorSet, 0, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &inputInfo, nullptr, nullptr};
-        writes[1] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, m_gpu->descriptorSet, 1, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &outputInfo, nullptr, nullptr};
-        vkUpdateDescriptorSets(m_gpu->device, 2, writes, 0, nullptr);
-
         m_gpu->imageWidth = w;
         m_gpu->imageHeight = h;
         m_gpu->layoutInitialized = false;
     }
 
-    // 初始化图像布局（仅一次）
+    // 更新权重表（如果双边滤波参数变化）
+    if (m_gpu_filter_type == "bilateral") {
+        static int lastD = -1;
+        static float lastSigmaColor = -1, lastSigmaSpace = -1;
+        if (lastD != m_gpu_bilateral_d || lastSigmaColor != m_gpu_bilateral_sigma_color || lastSigmaSpace != m_gpu_bilateral_sigma_space) {
+            int totalPixels = m_gpu_bilateral_d * m_gpu_bilateral_d;
+            int colorRange = 256;
+            size_t weightSize = totalPixels * sizeof(float) + colorRange * sizeof(float);
+            // 如果缓冲区大小不足，重新创建
+            if (m_gpu->weightBuffer == VK_NULL_HANDLE || m_gpu->weightSize < weightSize) {
+                if (m_gpu->weightBuffer) vkDestroyBuffer(m_gpu->device, m_gpu->weightBuffer, nullptr);
+                if (m_gpu->weightMemory) vkFreeMemory(m_gpu->device, m_gpu->weightMemory, nullptr);
+                if (!m_gpu->createBuffer(weightSize,
+                                         VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                                         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                                         m_gpu->weightBuffer, m_gpu->weightMemory)) {
+                    LOG_ERROR("Failed to create weight buffer of size {}", weightSize);
+                    return false;
+                }
+                m_gpu->weightSize = weightSize;
+            }
+            // 计算权重表并上传
+            std::vector<float> spatialWeights(totalPixels);
+            std::vector<float> colorWeights(colorRange);
+            computeWeightTables(spatialWeights.data(), colorWeights.data(),
+                                m_gpu_bilateral_d,
+                                (float)m_gpu_bilateral_sigma_space,
+                                (float)m_gpu_bilateral_sigma_color);
+            void* ptr;
+            vkMapMemory(m_gpu->device, m_gpu->weightMemory, 0, weightSize, 0, &ptr);
+            memcpy(ptr, spatialWeights.data(), totalPixels * sizeof(float));
+            memcpy((char*)ptr + totalPixels * sizeof(float), colorWeights.data(), colorRange * sizeof(float));
+            vkUnmapMemory(m_gpu->device, m_gpu->weightMemory);
+            lastD = m_gpu_bilateral_d;
+            lastSigmaColor = m_gpu_bilateral_sigma_color;
+            lastSigmaSpace = m_gpu_bilateral_sigma_space;
+        }
+    }
+
     if (!m_gpu->layoutInitialized) {
         VkCommandBuffer cmd = m_gpu->commandBuffers[0];
         VkCommandBufferBeginInfo beginInfo{};
@@ -558,6 +629,26 @@ bool CensusTransform::computeGPU(const cv::Mat& src, cv::Mat& dst) {
         vkQueueWaitIdle(m_gpu->queue);
         vkResetCommandBuffer(cmd, 0);
         m_gpu->layoutInitialized = true;
+
+        // 绑定描述符集
+        VkDescriptorImageInfo inputInfo{};
+        inputInfo.sampler = m_gpu->sampler;
+        inputInfo.imageView = m_gpu->inputImageView;
+        inputInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        VkDescriptorImageInfo outputInfo{};
+        outputInfo.sampler = m_gpu->sampler;
+        outputInfo.imageView = m_gpu->outputImageView;
+        outputInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        VkDescriptorBufferInfo weightInfo{};
+        weightInfo.buffer = m_gpu->weightBuffer;
+        weightInfo.offset = 0;
+        weightInfo.range = m_gpu->weightSize;
+
+        VkWriteDescriptorSet writes[3];
+        writes[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, m_gpu->descriptorSet, 0, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &inputInfo, nullptr, nullptr};
+        writes[1] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, m_gpu->descriptorSet, 1, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &outputInfo, nullptr, nullptr};
+        writes[2] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, m_gpu->descriptorSet, 2, 0, 1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, nullptr, &weightInfo, nullptr};
+        vkUpdateDescriptorSets(m_gpu->device, 3, writes, 0, nullptr);
     }
 
     int frameIdx = m_gpu->currentFrame;
@@ -565,28 +656,23 @@ bool CensusTransform::computeGPU(const cv::Mat& src, cv::Mat& dst) {
     int stagingIdx = m_gpu->currentStaging;
     int nextStagingIdx = (stagingIdx + 1) % 3;
 
-    // 等待当前帧的栅栏
     vkWaitForFences(m_gpu->device, 1, &m_gpu->fences[frameIdx], VK_TRUE, UINT64_MAX);
     vkResetFences(m_gpu->device, 1, &m_gpu->fences[frameIdx]);
 
-    // 上传数据
     void* mapped;
     vkMapMemory(m_gpu->device, m_gpu->stagingMemories[stagingIdx], 0, imageSize, 0, &mapped);
     std::memcpy(mapped, src.data, imageSize);
     vkUnmapMemory(m_gpu->device, m_gpu->stagingMemories[stagingIdx]);
 
-    // 记录命令缓冲
     vkResetCommandBuffer(m_gpu->commandBuffers[frameIdx], 0);
     VkCommandBufferBeginInfo beginInfo{};
     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(m_gpu->commandBuffers[frameIdx], &beginInfo);
 
-    // 拷贝数据到输入图像
     m_gpu->copyBufferToImage(m_gpu->commandBuffers[frameIdx], m_gpu->stagingBuffers[stagingIdx],
                              m_gpu->inputImage, w, h);
 
-    // 内存屏障：拷贝完成后再计算
     VkMemoryBarrier barrier{};
     barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
     barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
@@ -594,26 +680,33 @@ bool CensusTransform::computeGPU(const cv::Mat& src, cv::Mat& dst) {
     vkCmdPipelineBarrier(m_gpu->commandBuffers[frameIdx], VK_PIPELINE_STAGE_TRANSFER_BIT,
                          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &barrier, 0, nullptr, 0, nullptr);
 
-    // 执行计算
+    // 确定滤波类型编码
+    int filter_type = 0;
+    if (m_gpu_filter_type == "median") filter_type = 1;
+    else if (m_gpu_filter_type == "bilateral") filter_type = 2;
+    else filter_type = 0;
+
     if (!m_gpu->dispatchCompute(m_gpu->commandBuffers[frameIdx], w, h,
                                 m_win_width, m_win_height,
-                                m_workgroup_x, m_workgroup_y)) {
+                                m_workgroup_x, m_workgroup_y,
+                                m_adaptive_threshold,
+                                filter_type,
+                                m_gpu_bilateral_d,
+                                (float)m_gpu_bilateral_sigma_color,
+                                (float)m_gpu_bilateral_sigma_space)) {
         return false;
     }
 
-    // 内存屏障：计算完成后再拷贝结果
     barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
     barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
     vkCmdPipelineBarrier(m_gpu->commandBuffers[frameIdx], VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                          VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &barrier, 0, nullptr, 0, nullptr);
 
-    // 拷贝结果到暂存缓冲区
     m_gpu->copyImageToBuffer(m_gpu->commandBuffers[frameIdx], m_gpu->outputImage,
                              m_gpu->stagingBuffers[stagingIdx], w, h);
 
     vkEndCommandBuffer(m_gpu->commandBuffers[frameIdx]);
 
-    // 提交命令
     VkSubmitInfo submitInfo{};
     submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     submitInfo.commandBufferCount = 1;
@@ -625,14 +718,11 @@ bool CensusTransform::computeGPU(const cv::Mat& src, cv::Mat& dst) {
         return false;
     }
 
-    // 更新索引
     m_gpu->currentFrame = nextFrameIdx;
     m_gpu->currentStaging = nextStagingIdx;
 
-    // 等待当前帧完成（为了读回结果）
     vkWaitForFences(m_gpu->device, 1, &m_gpu->fences[frameIdx], VK_TRUE, UINT64_MAX);
 
-    // 读取结果
     vkMapMemory(m_gpu->device, m_gpu->stagingMemories[stagingIdx], 0, outputSize, 0, &mapped);
     dst.create(h, w, CV_16U);
     std::memcpy(dst.data, mapped, outputSize);

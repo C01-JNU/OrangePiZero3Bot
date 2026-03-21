@@ -4,37 +4,119 @@ layout(local_size_x = 32, local_size_y = 32) in;
 
 layout(binding = 0, r8) uniform readonly image2D inputImage;
 layout(binding = 1, r16ui) uniform writeonly uimage2D outputImage;
+layout(binding = 2) uniform WeightTables {
+    float spatialWeights[961];   // 最大支持 31x31 窗口 (15x15 直径)
+    float colorWeights[256];     // 颜色权重表
+} weights;
 
-layout(push_constant) uniform PushConstants {
-    int windowWidth;
-    int windowHeight;
+layout(push_constant) uniform PC {
+    int windowWidth;          // Census 窗口宽度（奇数）
+    int windowHeight;         // Census 窗口高度（奇数）
     int imageWidth;
     int imageHeight;
+    int adaptiveThreshold;    // 自适应阈值（0表示标准模式）
+    int filterType;           // 0: none, 1: median, 2: bilateral
+    int bilateralD;           // 双边滤波直径（奇数，最大15）
+    float bilateralSigmaColor;
+    float bilateralSigmaSpace;
 } pc;
 
 void main() {
     ivec2 pos = ivec2(gl_GlobalInvocationID.xy);
     if (pos.x >= pc.imageWidth || pos.y >= pc.imageHeight) return;
 
-    int halfW = pc.windowWidth / 2;
-    int halfH = pc.windowHeight / 2;
-
-    if (pos.x < halfW || pos.x >= pc.imageWidth - halfW ||
-        pos.y < halfH || pos.y >= pc.imageHeight - halfH) {
+    // 边界处理（Census 窗口边界）
+    int halfCensusW = pc.windowWidth / 2;
+    int halfCensusH = pc.windowHeight / 2;
+    if (pos.x < halfCensusW || pos.x >= pc.imageWidth - halfCensusW ||
+        pos.y < halfCensusH || pos.y >= pc.imageHeight - halfCensusH) {
         imageStore(outputImage, pos, uvec4(0));
         return;
     }
 
-    float center = imageLoad(inputImage, pos).r;
+    // 加载 Census 窗口像素（用于后续比较）
+    const int censusTotal = pc.windowWidth * pc.windowHeight;
+    float censusWindow[15]; // 5x3=15，固定
+    int idx = 0;
+    for (int dy = -halfCensusH; dy <= halfCensusH; ++dy) {
+        for (int dx = -halfCensusW; dx <= halfCensusW; ++dx) {
+            censusWindow[idx++] = imageLoad(inputImage, pos + ivec2(dx, dy)).r;
+        }
+    }
 
+    // 转换为整数范围 0-255
+    int intCensusWindow[15];
+    for (int i = 0; i < censusTotal; ++i) {
+        intCensusWindow[i] = int(censusWindow[i] * 255.0 + 0.5);
+    }
+
+    // 计算滤波中心值（如果需要）
+    int centerVal;
+    if (pc.filterType == 0) {
+        // 无滤波，直接取 Census 窗口中心
+        centerVal = intCensusWindow[halfCensusW + halfCensusH * pc.windowWidth];
+    } else if (pc.filterType == 1) {
+        // 中值滤波：对 Census 窗口排序取中值
+        int sorted[15];
+        for (int i = 0; i < censusTotal; ++i) sorted[i] = intCensusWindow[i];
+        for (int i = 1; i < censusTotal; ++i) {
+            int key = sorted[i];
+            int j = i - 1;
+            while (j >= 0 && sorted[j] > key) {
+                sorted[j+1] = sorted[j];
+                j--;
+            }
+            sorted[j+1] = key;
+        }
+        centerVal = sorted[censusTotal/2];
+    } else { // pc.filterType == 2 双边滤波
+        int radius = pc.bilateralD / 2;
+        int filterTotal = pc.bilateralD * pc.bilateralD;
+        // 加载双边滤波窗口内所有像素（可能超出 Census 窗口，但不会超过图像边界）
+        // 注意边界处理：在图像边界处，超出图像范围的部分使用边缘像素或置0？
+        // 为简化，仅当滤波窗口完全在图像内时才进行，否则退化为无滤波。
+        if (pos.x < radius || pos.x >= pc.imageWidth - radius ||
+            pos.y < radius || pos.y >= pc.imageHeight - radius) {
+            centerVal = intCensusWindow[halfCensusW + halfCensusH * pc.windowWidth];
+        } else {
+            float sumWeight = 0.0;
+            float sumValue = 0.0;
+            int centerIdx = radius * pc.bilateralD + radius;
+            // 暂时无法预先计算空间权重索引顺序，需按偏移顺序计算
+            for (int dy = -radius; dy <= radius; ++dy) {
+                for (int dx = -radius; dx <= radius; ++dx) {
+                    float neighbor = imageLoad(inputImage, pos + ivec2(dx, dy)).r;
+                    int neighborInt = int(neighbor * 255.0 + 0.5);
+                    int colorDiff = abs(neighborInt - intCensusWindow[halfCensusW + halfCensusH * pc.windowWidth]);
+                    // 空间权重索引：按行优先顺序
+                    int idxSpace = (dy+radius) * pc.bilateralD + (dx+radius);
+                    float w = weights.spatialWeights[idxSpace] * weights.colorWeights[colorDiff];
+                    sumWeight += w;
+                    sumValue += w * neighborInt;
+                }
+            }
+            centerVal = int(sumValue / sumWeight + 0.5);
+        }
+    }
+
+    // 自适应阈值 Census
     uint code = 0;
     int bit = 0;
-    for (int dy = -halfH; dy <= halfH; ++dy) {
-        for (int dx = -halfW; dx <= halfW; ++dx) {
+    for (int dy = -halfCensusH; dy <= halfCensusH; ++dy) {
+        for (int dx = -halfCensusW; dx <= halfCensusW; ++dx) {
             if (dx == 0 && dy == 0) continue;
-            float neighbor = imageLoad(inputImage, pos + ivec2(dx, dy)).r;
-            if (neighbor < center) {
-                code |= (1u << bit);
+            int neighbor = intCensusWindow[(dy+halfCensusH)*pc.windowWidth + (dx+halfCensusW)];
+            int diff = neighbor - centerVal;
+            if (pc.adaptiveThreshold == 0) {
+                // 标准模式
+                if (neighbor < centerVal) code |= (1u << bit);
+            } else {
+                // 自适应模式：忽略差异小于阈值的像素，对显著差异按标准比较编码
+                if (abs(diff) > pc.adaptiveThreshold) {
+                    if (neighbor < centerVal) {
+                        code |= (1u << bit);
+                    }
+                }
             }
             bit++;
         }

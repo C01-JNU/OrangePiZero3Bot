@@ -3,6 +3,7 @@
 set(CENSUS_SOURCES
     census_transform.cpp
     census_transform_cpu.cpp
+    filters.cpp
 )
 
 if(WITH_VULKAN)
@@ -23,34 +24,23 @@ if(WITH_VULKAN)
         message(FATAL_ERROR "Neither glslc nor glslangValidator found.")
     endif()
 
-    # 着色器编译
-    set(SHADER_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/shaders)
-    set(SHADER_BINARY_DIR ${CMAKE_CURRENT_BINARY_DIR}/shaders)
-    file(MAKE_DIRECTORY ${SHADER_BINARY_DIR})
+    # 编译整合后的着色器
+    set(SHADER_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/shaders/census.comp)
+    set(SPV_FILE ${CMAKE_CURRENT_BINARY_DIR}/shaders/census.comp.spv)
+    add_custom_command(
+        OUTPUT ${SPV_FILE}
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/shaders
+        COMMAND ${SHADER_COMPILER} ${SHADER_COMPILER_ARGS} ${SPV_FILE} ${SHADER_SOURCE}
+        DEPENDS ${SHADER_SOURCE}
+        COMMENT "Compiling shader census.comp"
+    )
+    add_custom_target(generate_census_shaders ALL DEPENDS ${SPV_FILE})
 
-    file(GLOB SHADER_SOURCES ${SHADER_SOURCE_DIR}/*.comp)
-    set(SPV_TARGETS)
-    foreach(shader ${SHADER_SOURCES})
-        get_filename_component(name ${shader} NAME_WLE)
-        set(spv_file ${SHADER_BINARY_DIR}/${name}.comp.spv)
-        add_custom_command(
-            OUTPUT ${spv_file}
-            COMMAND ${SHADER_COMPILER} ${SHADER_COMPILER_ARGS} ${spv_file} ${shader}
-            DEPENDS ${shader}
-            COMMENT "Compiling shader ${name}"
-        )
-        list(APPEND SPV_TARGETS ${spv_file})
-    endforeach()
-
-    add_custom_target(generate_census_shaders ALL DEPENDS ${SPV_TARGETS})
-
-    foreach(spv ${SPV_TARGETS})
-        get_filename_component(spv_name ${spv} NAME)
-        add_custom_command(TARGET generate_census_shaders POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/bin/shaders/
-            COMMAND ${CMAKE_COMMAND} -E copy ${spv} ${CMAKE_BINARY_DIR}/bin/shaders/${spv_name}
-        )
-    endforeach()
+    # 复制到可执行文件目录
+    add_custom_command(TARGET generate_census_shaders POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/bin/shaders/
+        COMMAND ${CMAKE_COMMAND} -E copy ${SPV_FILE} ${CMAKE_BINARY_DIR}/bin/shaders/census.comp.spv
+    )
 endif()
 
 add_library(census ${CENSUS_SOURCES})

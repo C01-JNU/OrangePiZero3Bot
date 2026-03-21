@@ -1,6 +1,6 @@
 // census_transform.h
 // Census 变换模块，将灰度图像转换为 Census 特征图，支持 CPU 和 GPU (Vulkan) 后端
-// 最后更新: 2026-03-20
+// 最后更新: 2026-03-21
 // 作者: DeepSeek
 
 #pragma once
@@ -9,142 +9,117 @@
 #include <string>
 #include <memory>
 #include <atomic>
+#include "census/filters.h"
 
 namespace stereo_depth::census {
 
-/**
- * @brief Census 变换运行模式
- */
 enum class Mode {
-    CPU,    ///< CPU 实现
-    GPU     ///< GPU (Vulkan) 实现
+    CPU,
+    GPU
 };
 
-/**
- * @brief Census 变换配置结构体
- */
+enum class CensusMode {
+    STANDARD,       // 传统 Census
+    ADAPTIVE,       // 自适应阈值
+    MEDIAN_CENTER   // 中值-Census（已并入 GPU 统一实现，保留枚举用于配置）
+};
+
 struct CensusConfig {
-    int window_width = 5;               ///< 窗口宽度（奇数）
-    int window_height = 5;              ///< 窗口高度（奇数）
-    int workgroup_size_x = 32;          ///< GPU 工作组宽度（需与着色器同步）
-    int workgroup_size_y = 32;          ///< GPU 工作组高度（需与着色器同步）
+    // 窗口尺寸
+    int window_width = 5;
+    int window_height = 3;
 
-    std::string filter_type = "none";   ///< 滤波类型: "none", "gaussian", "median"
-    int filter_kernel_size = 3;         ///< 滤波核大小（奇数）
-    double filter_sigma = 0.5;          ///< 标准差（仅用于高斯滤波）
+    // GPU 工作组大小
+    int workgroup_size_x = 32;
+    int workgroup_size_y = 32;
 
-    /**
-     * @brief 从全局配置加载参数
-     * @return 是否成功
-     */
+    // ========== CPU 前滤波配置 ==========
+    std::string cpu_pre_filter_type = "bilateral";   // "none", "median", "bilateral"
+    int cpu_pre_median_ksize = 5;                    // 中值滤波核大小（奇数）
+    int cpu_pre_bilateral_d = 9;                     // 双边滤波直径（奇数）
+    double cpu_pre_bilateral_sigma_color = 50.0;
+    double cpu_pre_bilateral_sigma_space = 9.0;
+
+    // ========== 后滤波（CPU）配置 ==========
+    std::string post_filter_type = "none";           // "none", "median", "bilateral"
+    int post_filter_median_ksize = 3;
+    int post_filter_bilateral_d = 5;
+    double post_filter_bilateral_sigma_color = 50.0;
+    double post_filter_bilateral_sigma_space = 5.0;
+
+    // ========== GPU 前滤波配置（仅 GPU 后端有效）==========
+    std::string gpu_filter_type = "bilateral";       // "none", "median", "bilateral"
+    int gpu_bilateral_d = 15;                         // 双边滤波直径（奇数，支持最大 15，即窗口 15x15）
+    double gpu_bilateral_sigma_color = 50.0;
+    double gpu_bilateral_sigma_space = 9.0;
+
+    // ========== Census 算法配置 ==========
+    CensusMode census_mode = CensusMode::ADAPTIVE;
+    int adaptive_threshold = 2;
+
     bool loadFromConfig();
 };
 
-/**
- * @brief Census 变换类
- */
 class CensusTransform {
 public:
     CensusTransform();
     explicit CensusTransform(const std::string& config_path);
     ~CensusTransform();
 
-    // 禁止拷贝，允许移动
     CensusTransform(const CensusTransform&) = delete;
     CensusTransform& operator=(const CensusTransform&) = delete;
     CensusTransform(CensusTransform&&) = delete;
     CensusTransform& operator=(CensusTransform&&) = delete;
 
-    /**
-     * @brief 初始化变换器（正方形窗口）
-     * @param window_size 窗口尺寸（奇数）
-     * @return 是否成功
-     */
     bool initialize(int window_size = 5);
-
-    /**
-     * @brief 初始化变换器（矩形窗口）
-     * @param win_width 窗口宽度（奇数）
-     * @param win_height 窗口高度（奇数）
-     * @return 是否成功
-     */
     bool initialize(int win_width, int win_height);
-
-    /**
-     * @brief 从配置文件初始化
-     * @return 是否成功
-     */
     bool initializeFromConfig();
 
-    /**
-     * @brief 计算 Census 变换
-     * @param src 输入灰度图像 (CV_8UC1)
-     * @param dst 输出 Census 特征图 (CV_16U)
-     * @return 是否成功
-     */
     bool compute(const cv::Mat& src, cv::Mat& dst);
 
-    /**
-     * @brief 获取当前运行模式
-     */
     Mode getMode() const { return m_mode; }
-
-    /**
-     * @brief 设置运行模式
-     * @param mode 新模式
-     */
     void setMode(Mode mode);
-
-    /**
-     * @brief 检查是否已初始化
-     */
     bool isInitialized() const { return m_initialized; }
-
-    /**
-     * @brief 获取窗口宽度
-     */
     int getWindowWidth() const { return m_win_width; }
-
-    /**
-     * @brief 获取窗口高度
-     */
     int getWindowHeight() const { return m_win_height; }
-
-    /**
-     * @brief 检查 GPU 是否可用（编译时定义 WITH_VULKAN）
-     */
     static bool isGpuAvailable();
 
 private:
-    // CPU 实现
     bool computeCPU(const cv::Mat& src, cv::Mat& dst);
-
 #ifdef WITH_VULKAN
-    // GPU 实现
     bool computeGPU(const cv::Mat& src, cv::Mat& dst);
     bool initGPU();
 #endif
 
-    // 成员变量
-    Mode m_mode;                     ///< 当前运行模式
-    int m_win_width;                 ///< 窗口宽度
-    int m_win_height;                ///< 窗口高度
-    int m_workgroup_x;               ///< GPU 工作组宽度
-    int m_workgroup_y;               ///< GPU 工作组高度
-    std::atomic<bool> m_initialized; ///< 初始化标志
+    Mode m_mode;
+    int m_win_width;
+    int m_win_height;
+    int m_workgroup_x;
+    int m_workgroup_y;
+    std::atomic<bool> m_initialized;
 
-    // 滤波参数
-    std::string m_filter_type;       ///< 滤波类型
-    int m_filter_kernel_size;        ///< 滤波核大小
-    double m_filter_sigma;           ///< 标准差（仅用于高斯滤波）
+    // CPU 前滤波参数
+    FilterParams m_cpu_pre_filter;
+
+    // 后滤波参数
+    FilterParams m_post_filter;
+
+    // GPU 前滤波参数
+    std::string m_gpu_filter_type;
+    int m_gpu_bilateral_d;
+    double m_gpu_bilateral_sigma_color;
+    double m_gpu_bilateral_sigma_space;
+
+    // Census 算法参数
+    CensusMode m_census_mode;
+    int m_adaptive_threshold;
 
 #ifdef WITH_VULKAN
-    // GPU 资源（前向声明）
     struct GpuResources;
     GpuResources* m_gpu = nullptr;
 #endif
 
-    CensusConfig m_config;           ///< 运行时配置
+    CensusConfig m_config;
 };
 
 } // namespace stereo_depth::census
