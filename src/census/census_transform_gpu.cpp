@@ -231,7 +231,7 @@ struct CensusTransform::GpuResources {
             int ww, wh, iw, ih;
             int thresh;
             int ftype;
-            int d;               // 双边滤波直径
+            int d;
             float scolor;
             float sspace;
         } pc = {win_w, win_h, (int)width, (int)height, adaptive_thresh, filter_type, bilateral_d, sigma_color, sigma_space};
@@ -507,21 +507,21 @@ bool CensusTransform::initGPU() {
     return true;
 }
 
-// 辅助函数：计算双边滤波权重表（空间权重表大小随直径变化）
+// 辅助函数：计算双边滤波权重表（固定数组大小 961，实际填充 bilateralD*bilateralD 个，其余置0）
 static void computeWeightTables(float* spatialWeights, float* colorWeights,
                                 int bilateral_d,
                                 float sigmaSpace, float sigmaColor) {
-    int radius = bilateral_d / 2;
     int total = bilateral_d * bilateral_d;
     float invSpaceVar = 1.0f / (2.0f * sigmaSpace * sigmaSpace);
     float invColorVar = 1.0f / (2.0f * sigmaColor * sigmaColor);
     int idx = 0;
-    for (int dy = -radius; dy <= radius; ++dy) {
-        for (int dx = -radius; dx <= radius; ++dx) {
+    for (int dy = -bilateral_d/2; dy <= bilateral_d/2; ++dy) {
+        for (int dx = -bilateral_d/2; dx <= bilateral_d/2; ++dx) {
             float dist2 = dx*dx + dy*dy;
             spatialWeights[idx++] = exp(-dist2 * invSpaceVar);
         }
     }
+    // 其余空间权重（若 total < 961）保持为0，着色器不会访问
     for (int d = 0; d < 256; ++d) {
         colorWeights[d] = exp(-d*d * invColorVar);
     }
@@ -578,10 +578,15 @@ bool CensusTransform::computeGPU(const cv::Mat& src, cv::Mat& dst) {
         static int lastD = -1;
         static float lastSigmaColor = -1, lastSigmaSpace = -1;
         if (lastD != m_gpu_bilateral_d || lastSigmaColor != m_gpu_bilateral_sigma_color || lastSigmaSpace != m_gpu_bilateral_sigma_space) {
-            int totalPixels = m_gpu_bilateral_d * m_gpu_bilateral_d;
-            int colorRange = 256;
-            size_t weightSize = totalPixels * sizeof(float) + colorRange * sizeof(float);
-            // 如果缓冲区大小不足，重新创建
+            const int maxSize = 31 * 31; // 固定最大大小
+            std::vector<float> spatialWeights(maxSize, 0.0f);
+            std::vector<float> colorWeights(256);
+            computeWeightTables(spatialWeights.data(), colorWeights.data(),
+                                m_gpu_bilateral_d,
+                                (float)m_gpu_bilateral_sigma_space,
+                                (float)m_gpu_bilateral_sigma_color);
+            size_t weightSize = maxSize * sizeof(float) + 256 * sizeof(float);
+            // 确保缓冲区大小足够
             if (m_gpu->weightBuffer == VK_NULL_HANDLE || m_gpu->weightSize < weightSize) {
                 if (m_gpu->weightBuffer) vkDestroyBuffer(m_gpu->device, m_gpu->weightBuffer, nullptr);
                 if (m_gpu->weightMemory) vkFreeMemory(m_gpu->device, m_gpu->weightMemory, nullptr);
@@ -594,17 +599,10 @@ bool CensusTransform::computeGPU(const cv::Mat& src, cv::Mat& dst) {
                 }
                 m_gpu->weightSize = weightSize;
             }
-            // 计算权重表并上传
-            std::vector<float> spatialWeights(totalPixels);
-            std::vector<float> colorWeights(colorRange);
-            computeWeightTables(spatialWeights.data(), colorWeights.data(),
-                                m_gpu_bilateral_d,
-                                (float)m_gpu_bilateral_sigma_space,
-                                (float)m_gpu_bilateral_sigma_color);
             void* ptr;
             vkMapMemory(m_gpu->device, m_gpu->weightMemory, 0, weightSize, 0, &ptr);
-            memcpy(ptr, spatialWeights.data(), totalPixels * sizeof(float));
-            memcpy((char*)ptr + totalPixels * sizeof(float), colorWeights.data(), colorRange * sizeof(float));
+            memcpy(ptr, spatialWeights.data(), maxSize * sizeof(float));
+            memcpy((char*)ptr + maxSize * sizeof(float), colorWeights.data(), 256 * sizeof(float));
             vkUnmapMemory(m_gpu->device, m_gpu->weightMemory);
             lastD = m_gpu_bilateral_d;
             lastSigmaColor = m_gpu_bilateral_sigma_color;
@@ -680,7 +678,6 @@ bool CensusTransform::computeGPU(const cv::Mat& src, cv::Mat& dst) {
     vkCmdPipelineBarrier(m_gpu->commandBuffers[frameIdx], VK_PIPELINE_STAGE_TRANSFER_BIT,
                          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &barrier, 0, nullptr, 0, nullptr);
 
-    // 确定滤波类型编码
     int filter_type = 0;
     if (m_gpu_filter_type == "median") filter_type = 1;
     else if (m_gpu_filter_type == "bilateral") filter_type = 2;

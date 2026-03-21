@@ -1,97 +1,33 @@
-# ============================================================
-# Census 变换配置文件
-# ============================================================
-#
-# 本文件控制 Census 变换的所有参数。
-# 程序运行时根据编译选项（WITH_VULKAN）自动选择 CPU 或 GPU 后端。
-# - 若 WITH_VULKAN=ON（即 use_gpu: true），使用 GPU 后端，此时：
-#   * 前滤波由 GPU 着色器完成（参数见 gpu_filter_*）
-#   * 后滤波可选（由 CPU 执行）
-# - 若 WITH_VULKAN=OFF（即 use_gpu: false），使用 CPU 后端，此时：
-#   * 前滤波由 CPU 执行（参数见 cpu_pre_filter_*）
-#   * 后滤波可选（由 CPU 执行）
-#
-# ============================================================
-# 窗口尺寸（奇数）
-# ============================================================
-# 注意：GPU 后端中，Census 窗口固定为 5x3（像素数15），
-# 双边滤波窗口独立由 gpu_bilateral_d 控制（最大15）。
-# 若修改 window_width 或 window_height，必须确保窗口大小 <= 15，
-# 且需同步修改着色器中数组大小。
+# Census 变换配置
 census:
+  # 窗口尺寸（奇数）
   window_width: 5
   window_height: 3
 
-  # ============================================================
-  # GPU 工作组大小（仅 GPU 后端有效）
-  # ============================================================
-  # 可选值：整数，必须为 2 的幂（如 8, 16, 32, 64），与着色器 local_size 一致。
+  # GPU 工作组大小
   workgroup_size_x: 32
   workgroup_size_y: 32
 
-  # ============================================================
-  # CPU 前滤波配置（仅 CPU 后端有效）
-  # ============================================================
-  # cpu_pre_filter_type 可选值：
-  #   "none"      : 无滤波
-  #   "median"    : 中值滤波
-  #   "bilateral" : 双边滤波
+  # CPU 前滤波配置
   cpu_pre_filter_type: "bilateral"
-
-  # 中值滤波参数（当 cpu_pre_filter_type = "median" 时使用）
-  # 可选值：奇数整数（如 3,5,7,...）
   cpu_pre_median_ksize: 5
-
-  # 双边滤波参数（当 cpu_pre_filter_type = "bilateral" 时使用）
-  # cpu_pre_bilateral_d: 滤波直径（奇数，如 5,7,9,...）
-  # cpu_pre_bilateral_sigma_color: 颜色标准差（浮点数，越大平滑越强）
-  # cpu_pre_bilateral_sigma_space: 空间标准差（浮点数，建议与 d 相近）
   cpu_pre_bilateral_d: 9
   cpu_pre_bilateral_sigma_color: 50.0
   cpu_pre_bilateral_sigma_space: 9.0
 
-  # ============================================================
-  # GPU 前滤波配置（仅 GPU 后端有效）
-  # ============================================================
-  # gpu_filter_type 可选值：
-  #   "none"      : 无滤波
-  #   "median"    : 中值滤波（对 Census 窗口取中值）
-  #   "bilateral" : 双边滤波（独立窗口，直径由 gpu_bilateral_d 控制）
-  gpu_filter_type: "bilateral"
-
-  # 双边滤波直径（奇数，最大 15，即窗口 15x15）
-  # 直径越大，平滑越强，计算量也越大。
-  gpu_bilateral_d: 15
-
-  # 双边滤波参数
-  # sigma_color 越大，颜色差异容忍度越高，平滑越强（但易产生等高线）
-  # sigma_space 越大，空间距离影响越小，平滑范围越大
-  gpu_bilateral_sigma_color: 50.0
-  gpu_bilateral_sigma_space: 9.0
-
-  # ============================================================
-  # 后滤波配置（CPU 执行，对 Census 结果滤波）
-  # ============================================================
-  # post_filter_type 可选值：
-  #   "none"     : 无后滤波
-  #   "median"   : 中值滤波（核大小 post_filter_median_ksize）
-  #   "bilateral": 双边滤波（参数见下）
+  # 后滤波配置
   post_filter_type: "none"
   post_filter_median_ksize: 3
   post_filter_bilateral_d: 5
   post_filter_bilateral_sigma_color: 50.0
   post_filter_bilateral_sigma_space: 5.0
 
-  # ============================================================
-  # Census 算法模式（统一由 GPU 或 CPU 处理）
-  # ============================================================
-  # census_mode 可选值：
-  #   "standard"   : 标准 Census，直接比较邻域与中心像素
-  #   "adaptive"   : 自适应阈值 Census，忽略差异小于 adaptive_threshold 的像素
-  #   "median_center": 已由 gpu_filter_type="median" 实现，此处保留仅为兼容
-  #
-  # 注意：
-  #   - 自适应阈值模式中，adaptive_threshold = 0 时等同于标准模式。
-  #   - 推荐 adaptive_threshold = 2~5 以抵抗噪声，同时保留纹理。
+  # GPU 前滤波配置
+  gpu_filter_type: "bilateral"
+  gpu_bilateral_d: 9                # 双边滤波直径（奇数，最大15）
+  gpu_bilateral_sigma_color: 50.0
+  gpu_bilateral_sigma_space: 9.0
+
+  # Census 算法模式
   census_mode: "adaptive"
-  adaptive_threshold: 2
+  adaptive_threshold: 18
