@@ -5,7 +5,7 @@
 preprocess:
   # 去噪配置
   denoise:
-    # 方法: "none", "median", "bilateral", "tinylut"
+    # 方法: "none", "median", "bilateral"
     method: "bilateral"
 
     # 中值滤波参数（仅当 method="median"）
@@ -16,11 +16,8 @@ preprocess:
     bilateral_sigma_color: 50.0
     bilateral_sigma_space: 9.0
 
-    # TinyLUT 参数（仅当 method="tinylut"）
-    tinylut_table_dir: "model/tinylut"   # 存放 .npy 表的目录
-
   # Census 变换配置
   census:
     window_width: 5
     window_height: 3
-    adaptive_threshold: 2       # 0 表示标准模式，>0 表示自适应阈值
+    adaptive_threshold: 0       # 0 表示标准模式，>0 表示自适应阈值

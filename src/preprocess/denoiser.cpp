@@ -19,10 +19,6 @@ bool Denoiser::initFromConfig() {
         m_params.bilateral_d = cfg.get<int>("preprocess.denoise.bilateral_d", 9);
         m_params.bilateral_sigma_color = cfg.get<double>("preprocess.denoise.bilateral_sigma_color", 50.0);
         m_params.bilateral_sigma_space = cfg.get<double>("preprocess.denoise.bilateral_sigma_space", 9.0);
-    } else if (method_str == "tinylut") {
-        m_params.method = DenoiseMethod::TINYLUT;
-        m_params.tinylut_table_dir = cfg.get<std::string>("preprocess.denoise.tinylut_table_dir", "model/tinylut");
-        LOG_WARN("TinyLUT denoiser not implemented yet, will return original image");
     } else {
         m_params.method = DenoiseMethod::NONE;
     }
@@ -53,11 +49,6 @@ bool Denoiser::process(const cv::Mat& src, cv::Mat& dst) {
             cv::bilateralFilter(src, dst, m_params.bilateral_d,
                                 m_params.bilateral_sigma_color,
                                 m_params.bilateral_sigma_space);
-            break;
-        case DenoiseMethod::TINYLUT:
-            // 预留：加载 .npy 表并查表
-            LOG_WARN("TinyLUT not implemented, returning original image");
-            dst = src.clone();
             break;
         default:
             dst = src.clone();
