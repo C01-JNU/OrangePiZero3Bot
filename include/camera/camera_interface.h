@@ -1,8 +1,8 @@
 #pragma once
 
 #include <opencv2/core.hpp>
-#include <string>
 #include <memory>
+#include <string>
 
 namespace stereo_depth::camera {
 
@@ -24,8 +24,8 @@ public:
 
     /**
      * @brief 获取一帧双目图像（阻塞，直到成功或超时）
-     * @param left 输出左图（CV_8UC1）
-     * @param right 输出右图（CV_8UC1）
+     * @param left 输出左图（CV_8UC3 BGR彩色）
+     * @param right 输出右图（CV_8UC3 BGR彩色）
      * @return 成功返回 true
      */
     virtual bool grab(cv::Mat& left, cv::Mat& right) = 0;

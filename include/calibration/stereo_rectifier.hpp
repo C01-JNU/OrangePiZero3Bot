@@ -32,6 +32,14 @@ public:
     bool loadAndInitialize(const std::string& calibration_file,
                            RectificationMode mode = RectificationMode::CROP_ONLY);
 
+    /**
+     * @brief 对双目图像对进行立体校正
+     * @param left_image  左目图像（支持 CV_8UC1 或 CV_8UC3）
+     * @param right_image 右目图像（支持 CV_8UC1 或 CV_8UC3）
+     * @param left_rectified  输出校正后的左图（与输入类型相同）
+     * @param right_rectified 输出校正后的右图
+     * @return 成功返回 true
+     */
     bool rectifyPair(const cv::Mat& left_image,
                      const cv::Mat& right_image,
                      cv::Mat& left_rectified,
@@ -66,33 +74,27 @@ public:
                                     const std::string& filename = "rectified");
 
 private:
-    // 内部函数
-    void computeValidROI();                     // 后备计算方法
+    void computeValidROI();
     void computeScalingParameters();
     bool computeRectificationMaps();
     bool createCombinedMaps();
     bool updateRectificationMaps();
     std::string modeToString(RectificationMode mode) const;
 
-    // 成员变量
     CalibrationParams m_params;
     cv::Size m_image_size;
     cv::Size m_output_size;
 
-    // 原始校正映射表
     cv::Mat m_left_map1, m_left_map2;
     cv::Mat m_right_map1, m_right_map2;
 
-    // 组合映射表（SCALE_TO_FIT）
     cv::Mat m_combined_left_map1, m_combined_left_map2;
     cv::Mat m_combined_right_map1, m_combined_right_map2;
 
-    // 有效区域（优先使用从标定文件加载的准确ROI）
     cv::Rect m_valid_roi_left;
     cv::Rect m_valid_roi_right;
-    bool m_has_calib_roi;                // 是否从文件加载了ROI
+    bool m_has_calib_roi;
 
-    // 缩放信息
     ScaleInfo m_scale_info;
 
     RectificationMode m_mode;

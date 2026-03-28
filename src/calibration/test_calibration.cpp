@@ -26,26 +26,23 @@ std::string getExeDir() {
 int main(int argc, char** argv) {
     std::string exeDir = getExeDir();
     
-    // 命令行参数解析（如果指定绝对路径则使用，否则基于 exeDir 构建）
     std::string calibration_file = (argc >= 2) ? argv[1] : (exeDir + "/calibration_results/stereo_calibration.yml");
     std::string test_image_dir   = (argc >= 3) ? argv[2] : (exeDir + "/images/test");
     std::string output_dir        = (argc >= 4) ? argv[3] : (exeDir + "/images/calibrated");
     std::string mode_str          = (argc >= 5) ? argv[4] : "crop_only";
     bool save_comparison = (argc >= 6) ? (std::string(argv[5]) == "true") : true;
     
-    // 解析校正模式
     stereo_depth::calibration::RectificationMode mode;
     if (mode_str == "raw") {
         mode = stereo_depth::calibration::RectificationMode::RAW;
     } else if (mode_str == "scale_to_fit") {
         mode = stereo_depth::calibration::RectificationMode::SCALE_TO_FIT;
     } else {
-        mode = stereo_depth::calibration::RectificationMode::CROP_ONLY;  // 默认
+        mode = stereo_depth::calibration::RectificationMode::CROP_ONLY;
     }
     
-    // 显示帮助
     if (argc == 2 && (std::string(argv[1]) == "-h" || std::string(argv[1]) == "--help")) {
-        std::cout << "立体校正测试程序\n";
+        std::cout << "立体校正测试程序（支持彩色图像）\n";
         std::cout << "用法: " << argv[0] << " [calibration_file] [test_image_dir] [output_dir] [mode] [save_comparison]\n";
         std::cout << "参数:\n";
         std::cout << "  calibration_file: 标定YAML文件路径 (默认: " << exeDir << "/calibration_results/stereo_calibration.yml)\n";
@@ -56,14 +53,13 @@ int main(int argc, char** argv) {
         return 0;
     }
     
-    LOG_INFO("=== 立体校正测试程序 ===");
+    LOG_INFO("=== 立体校正测试程序（支持彩色图像） ===");
     LOG_INFO("标定文件: {}", calibration_file);
     LOG_INFO("测试图像目录: {}", test_image_dir);
     LOG_INFO("输出目录: {}", output_dir);
     LOG_INFO("校正模式: {}", mode_str);
     LOG_INFO("保存对比图: {}", save_comparison ? "是" : "否");
     
-    // 1. 初始化立体校正器
     stereo_depth::calibration::StereoRectifier rectifier;
     stereo_depth::calibration::CalibrationParams params;
     stereo_depth::calibration::CalibrationLoader loader;
@@ -78,7 +74,6 @@ int main(int argc, char** argv) {
         return -1;
     }
     
-    // 2. 显示缩放信息（如果使用SCALE_TO_FIT模式）
     if (mode == stereo_depth::calibration::RectificationMode::SCALE_TO_FIT) {
         auto scale_info = rectifier.getScaleInfo();
         LOG_INFO("缩放信息:");
@@ -91,12 +86,12 @@ int main(int argc, char** argv) {
         LOG_INFO("  有效像素比例: {:.1f}%", scale_info.effective_ratio * 100.0);
     }
     
-    // 3. 获取测试图像
     std::vector<std::string> test_images;
     try {
         for (const auto& entry : fs::directory_iterator(test_image_dir)) {
             if (entry.is_regular_file() && 
-                (entry.path().extension() == ".jpg" || entry.path().extension() == ".png")) {
+                (entry.path().extension() == ".jpg" || entry.path().extension() == ".png" ||
+                 entry.path().extension() == ".jpeg" || entry.path().extension() == ".bmp")) {
                 test_images.push_back(entry.path().string());
             }
         }
@@ -114,13 +109,13 @@ int main(int argc, char** argv) {
     
     LOG_INFO("找到 {} 张测试图像", test_images.size());
     
-    // 4. 创建输出目录
     fs::create_directories(output_dir);
     fs::create_directories(output_dir + "/left");
     fs::create_directories(output_dir + "/right");
-    fs::create_directories(output_dir + "/comparison");
+    if (save_comparison) {
+        fs::create_directories(output_dir + "/comparison");
+    }
     
-    // 5. 处理每张图像
     int processed_count = 0;
     
     for (size_t i = 0; i < std::min(test_images.size(), static_cast<size_t>(10)); ++i) {
@@ -129,8 +124,8 @@ int main(int argc, char** argv) {
         LOG_INFO("处理图像 {}/{}: {}", i + 1, test_images.size(), fs::path(image_path).filename().string());
         
         try {
-            // 读取拼接图像
-            cv::Mat stitched_image = cv::imread(image_path, cv::IMREAD_GRAYSCALE);
+            // 读取彩色图像（保留原始颜色，用于验证彩色校正效果）
+            cv::Mat stitched_image = cv::imread(image_path, cv::IMREAD_COLOR);
             if (stitched_image.empty()) {
                 LOG_ERROR("无法读取图像: {}", image_path);
                 continue;
@@ -153,7 +148,6 @@ int main(int argc, char** argv) {
                 cv::resize(right_raw, right_raw, expected_size);
             }
             
-            // 执行立体校正（不再需要传入 mode 参数，使用对象当前模式）
             cv::Mat left_rectified, right_rectified;
             if (!rectifier.rectifyPair(left_raw, right_raw, 
                                         left_rectified, right_rectified)) {
@@ -161,43 +155,54 @@ int main(int argc, char** argv) {
                 continue;
             }
             
-            // 保存校正结果
+            // 保存校正结果（保留彩色）
             std::string filename_base = fs::path(image_path).stem().string();
             
-            // 保存左眼图像
             std::string left_path = output_dir + "/left/" + filename_base + "_left.png";
             cv::imwrite(left_path, left_rectified);
             
-            // 保存右眼图像
             std::string right_path = output_dir + "/right/" + filename_base + "_right.png";
             cv::imwrite(right_path, right_rectified);
             
-            // 保存对比图（原始 vs 校正后）
+            // 保存对比图（支持彩色）
             if (save_comparison) {
-                // 创建对比图：原始左图 | 校正后左图 | 原始右图 | 校正后右图
-                cv::Mat comparison = cv::Mat::zeros(
-                    std::max(left_raw.rows, left_rectified.rows) * 2,
-                    left_raw.cols + left_rectified.cols,
-                    CV_8UC1
-                );
+                int left_width = left_raw.cols;
+                int left_height = left_raw.rows;
+                int right_width = right_raw.cols;
+                int right_height = right_raw.rows;
+                int rect_left_width = left_rectified.cols;
+                int rect_right_width = right_rectified.cols;
+                int rect_height = left_rectified.rows; // 假设左右校正后高度相同
+                
+                // 确定对比图的尺寸：宽度 = 左原图宽 + 左校正宽 + 右原图宽 + 右校正宽
+                int total_width = left_width + rect_left_width + right_width + rect_right_width;
+                int total_height = std::max(left_height, rect_height) * 2;
+                
+                cv::Mat comparison;
+                if (left_raw.type() == CV_8UC3) {
+                    comparison = cv::Mat::zeros(total_height, total_width, CV_8UC3);
+                } else {
+                    comparison = cv::Mat::zeros(total_height, total_width, CV_8UC1);
+                }
                 
                 // 第一行：原始左右图
-                left_raw.copyTo(comparison(cv::Rect(0, 0, left_raw.cols, left_raw.rows)));
-                right_raw.copyTo(comparison(cv::Rect(left_raw.cols, 0, right_raw.cols, right_raw.rows)));
+                left_raw.copyTo(comparison(cv::Rect(0, 0, left_width, left_height)));
+                right_raw.copyTo(comparison(cv::Rect(left_width, 0, right_width, right_height)));
                 
                 // 第二行：校正后左右图
-                left_rectified.copyTo(comparison(cv::Rect(0, left_raw.rows, left_rectified.cols, left_rectified.rows)));
-                right_rectified.copyTo(comparison(cv::Rect(left_rectified.cols, right_raw.rows, right_rectified.cols, right_rectified.rows)));
+                left_rectified.copyTo(comparison(cv::Rect(0, total_height/2, rect_left_width, rect_height)));
+                right_rectified.copyTo(comparison(cv::Rect(rect_left_width, total_height/2, rect_right_width, rect_height)));
                 
-                // 添加标签
+                // 添加标签（颜色取决于图像类型）
+                cv::Scalar text_color = (left_raw.type() == CV_8UC3) ? cv::Scalar(0, 255, 0) : cv::Scalar(255);
                 cv::putText(comparison, "Original Left", cv::Point(10, 30),
-                           cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(255), 2);
-                cv::putText(comparison, "Original Right", cv::Point(left_raw.cols + 10, 30),
-                           cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(255), 2);
-                cv::putText(comparison, "Rectified Left", cv::Point(10, left_raw.rows + 30),
-                           cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(255), 2);
-                cv::putText(comparison, "Rectified Right", cv::Point(left_rectified.cols + 10, right_raw.rows + 30),
-                           cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(255), 2);
+                           cv::FONT_HERSHEY_SIMPLEX, 0.7, text_color, 2);
+                cv::putText(comparison, "Original Right", cv::Point(left_width + 10, 30),
+                           cv::FONT_HERSHEY_SIMPLEX, 0.7, text_color, 2);
+                cv::putText(comparison, "Rectified Left", cv::Point(10, total_height/2 + 30),
+                           cv::FONT_HERSHEY_SIMPLEX, 0.7, text_color, 2);
+                cv::putText(comparison, "Rectified Right", cv::Point(rect_left_width + 10, total_height/2 + 30),
+                           cv::FONT_HERSHEY_SIMPLEX, 0.7, text_color, 2);
                 
                 std::string comparison_path = output_dir + "/comparison/" + filename_base + "_comparison.png";
                 cv::imwrite(comparison_path, comparison);
@@ -210,7 +215,6 @@ int main(int argc, char** argv) {
         }
     }
     
-    // 6. 输出统计信息
     LOG_INFO("=== 处理完成 ===");
     LOG_INFO("总图像数: {}", test_images.size());
     LOG_INFO("成功处理: {}", processed_count);

@@ -8,6 +8,7 @@ OrangePi Zero3 立体视觉上位机（硬件监控版）
 - 右侧面板：硬件状态列表 + 折线图（CPU温度、CPU占用率）
 - 全局保存开关和目录选择
 - 基端口可动态修改
+- 保存图片自动分文件夹：stream<id>/YYYY-MM-DD/
 """
 
 import socket
@@ -22,6 +23,7 @@ from PIL import Image, ImageTk
 import os
 import time
 from collections import defaultdict, deque
+from datetime import datetime   # 新增用于日期文件夹
 
 # ========== 默认配置 ==========
 DEFAULT_BASE_PORT = 5000
@@ -293,11 +295,18 @@ class EmbeddedView:
             return cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
     def save_image(self, img, frame_id, timestamp):
-        save_dir = self.global_dir_var.get()
-        if not os.path.exists(save_dir):
-            os.makedirs(save_dir, exist_ok=True)
+        base_dir = self.global_dir_var.get()
+        if not base_dir:
+            return
+
+        # 按流ID和日期分文件夹
+        date_str = datetime.now().strftime("%Y-%m-%d")
+        subdir = os.path.join(base_dir, f"stream{self.stream_id}", date_str)
+        os.makedirs(subdir, exist_ok=True)
+
         filename = f"stream{self.stream_id}_{frame_id}_{timestamp}.png"
-        filepath = os.path.join(save_dir, filename)
+        filepath = os.path.join(subdir, filename)
+
         if len(img.shape) == 2:
             cv2.imwrite(filepath, img)
         else:
@@ -553,11 +562,18 @@ class ImageWindow(tk.Toplevel):
             return cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
     def save_image(self, img, frame_id, timestamp):
-        save_dir = self.save_dir.get()
-        if not os.path.exists(save_dir):
-            os.makedirs(save_dir, exist_ok=True)
+        base_dir = self.save_dir.get()
+        if not base_dir:
+            return
+
+        # 按流ID和日期分文件夹
+        date_str = datetime.now().strftime("%Y-%m-%d")
+        subdir = os.path.join(base_dir, f"stream{self.stream_id}", date_str)
+        os.makedirs(subdir, exist_ok=True)
+
         filename = f"stream{self.stream_id}_{frame_id}_{timestamp}.png"
-        filepath = os.path.join(save_dir, filename)
+        filepath = os.path.join(subdir, filename)
+
         if len(img.shape) == 2:
             cv2.imwrite(filepath, img)
         else:

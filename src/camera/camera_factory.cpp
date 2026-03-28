@@ -1,6 +1,6 @@
 #include "camera/camera_factory.h"
-#include "camera/mock_camera.h"
 #include "camera/chusei_camera.h"
+#include "camera/mock_camera.h"
 #include "utils/logger.hpp"
 
 namespace stereo_depth::camera {

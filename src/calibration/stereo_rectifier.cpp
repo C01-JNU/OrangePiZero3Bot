@@ -17,7 +17,7 @@ StereoRectifier::StereoRectifier(RectificationMode mode)
     , m_has_calib_roi(false)
     , m_initialized(false)
     , m_maps_computed(false) {
-    LOG_DEBUG("StereoRectifier 创建，默认模式: {}", modeToString(mode));
+    LOG_DEBUG("StereoRectifier 创建，默认模式: {}", modeToString(m_mode));
 }
 
 StereoRectifier::StereoRectifier(const std::string& calibration_file,
@@ -43,13 +43,12 @@ bool StereoRectifier::initialize(const CalibrationParams& params,
     m_params = params;
     m_image_size = params.image_size;
     m_mode = mode;
-    m_output_size = m_image_size;   // 临时
+    m_output_size = m_image_size;
 
     LOG_INFO("初始化立体校正处理器 (模式: {})", modeToString(m_mode));
     LOG_INFO("  输入尺寸: {}x{}", m_image_size.width, m_image_size.height);
     LOG_INFO("  基线长度: {:.2f} mm", m_params.baseline_meters * 1000.0);
 
-    // 如果尚未从文件加载 ROI，则计算后备 ROI
     if (!m_has_calib_roi) {
         LOG_INFO("未从标定文件加载ROI，使用后备计算方法");
         computeValidROI();
@@ -73,7 +72,6 @@ bool StereoRectifier::initialize(const CalibrationParams& params,
 
 bool StereoRectifier::loadAndInitialize(const std::string& calibration_file,
                                         RectificationMode mode) {
-    // 1. 使用 CalibrationLoader 加载常规参数
     CalibrationParams params;
     CalibrationLoader loader;
     if (!loader.loadFromFile(calibration_file, params)) {
@@ -81,19 +79,17 @@ bool StereoRectifier::loadAndInitialize(const std::string& calibration_file,
         return false;
     }
 
-    // 2. 额外打开文件，读取准确的 ROI（如果存在）
     cv::FileStorage fs(calibration_file, cv::FileStorage::READ);
     if (fs.isOpened()) {
         cv::Rect roi_left, roi_right;
         fs["valid_roi_left"] >> roi_left;
         fs["valid_roi_right"] >> roi_right;
-        
+
         LOG_INFO("从标定文件读取的 ROI 左: ({},{},{},{}), 右: ({},{},{},{})",
                  roi_left.x, roi_left.y, roi_left.width, roi_left.height,
                  roi_right.x, roi_right.y, roi_right.width, roi_right.height);
 
         if (!roi_left.empty() && !roi_right.empty()) {
-            // 取左右公共区域，确保输出图像尺寸一致
             cv::Rect common_roi = roi_left & roi_right;
             if (common_roi.area() > 0) {
                 m_valid_roi_left = common_roi;
@@ -112,7 +108,6 @@ bool StereoRectifier::loadAndInitialize(const std::string& calibration_file,
         LOG_WARN("无法重新打开标定文件读取ROI，将使用计算出的ROI");
     }
 
-    // 3. 初始化校正器（如果已加载 ROI，则 initialize 中不会再调用 computeValidROI）
     return initialize(params, mode);
 }
 
@@ -127,6 +122,11 @@ bool StereoRectifier::rectifyPair(const cv::Mat& left_image,
         return false;
     }
 
+    if (left_image.empty() || right_image.empty()) {
+        LOG_ERROR("输入图像为空");
+        return false;
+    }
+
     if (left_image.size() != m_image_size || right_image.size() != m_image_size) {
         LOG_ERROR("输入图像尺寸不匹配: 期望 {}x{}, 实际左={}x{}, 右={}x{}",
                   m_image_size.width, m_image_size.height,
@@ -135,10 +135,8 @@ bool StereoRectifier::rectifyPair(const cv::Mat& left_image,
         return false;
     }
 
-    if (left_image.type() != CV_8UC1 || right_image.type() != CV_8UC1) {
-        LOG_ERROR("输入图像必须是单通道灰度图 (CV_8UC1)");
-        return false;
-    }
+    // 移除单通道限制，允许任意通道（灰度或彩色）
+    // remap 会自动处理多通道图像
 
     auto start_time = std::chrono::high_resolution_clock::now();
 
@@ -151,7 +149,6 @@ bool StereoRectifier::rectifyPair(const cv::Mat& left_image,
                       m_combined_right_map1, m_combined_right_map2,
                       cv::INTER_LINEAR, cv::BORDER_CONSTANT, 0);
         } else if (m_mode == RectificationMode::CROP_ONLY) {
-            // 先校正
             cv::Mat left_tmp, right_tmp;
             cv::remap(left_image, left_tmp,
                       m_left_map1, m_left_map2,
@@ -160,11 +157,9 @@ bool StereoRectifier::rectifyPair(const cv::Mat& left_image,
                       m_right_map1, m_right_map2,
                       cv::INTER_LINEAR, cv::BORDER_CONSTANT, 0);
 
-            // 直接使用已计算好的有效区域 ROI（已保证左右一致）
             left_rectified = left_tmp(m_valid_roi_left).clone();
             right_rectified = right_tmp(m_valid_roi_right).clone();
 
-            // 更新输出尺寸
             m_output_size = left_rectified.size();
         } else { // RAW
             cv::remap(left_image, left_rectified,
@@ -291,13 +286,11 @@ void StereoRectifier::computeValidROI() {
     cv::Rect roi_left = cv::boundingRect(left_points);
     cv::Rect roi_right = cv::boundingRect(right_points);
 
-    // 取左右公共区域（确保输出图像大小一致）
     cv::Rect common_roi = roi_left & roi_right;
     if (common_roi.area() > 0) {
         m_valid_roi_left = common_roi;
         m_valid_roi_right = common_roi;
     } else {
-        // 如果没有交集，则分别使用各自的 ROI（可能导致尺寸不一致，但极罕见）
         m_valid_roi_left = roi_left;
         m_valid_roi_right = roi_right;
     }

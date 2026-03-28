@@ -48,14 +48,14 @@ add_subdirectory(src/camera)
 add_subdirectory(src/calibration)
 add_subdirectory(src/utils)
 add_subdirectory(src/network)
-add_subdirectory(src/census)          # census 模块
+add_subdirectory(src/preprocess)          # 新前处理模块
 
-# 主程序
-add_executable(stereo_depth src/main.cpp)
-target_link_libraries(stereo_depth PRIVATE
+# 主程序（改名为 start）
+add_executable(start src/main.cpp)
+target_link_libraries(start PRIVATE
     camera
     calibration_utils
-    census
+    preprocess
     utils
     network
     ${OpenCV_LIBS}
@@ -63,16 +63,16 @@ target_link_libraries(stereo_depth PRIVATE
     yaml-cpp
     Threads::Threads
 )
-set_target_properties(stereo_depth PROPERTIES
+set_target_properties(start PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
 )
 
-# 批量测试程序
-add_executable(test_stereo_depth src/test.cpp)
-target_link_libraries(test_stereo_depth PRIVATE
+# 测试程序（改名为 test）
+add_executable(test src/test.cpp)
+target_link_libraries(test PRIVATE
     camera
     calibration_utils
-    census
+    preprocess
     utils
     network
     ${OpenCV_LIBS}
@@ -80,7 +80,7 @@ target_link_libraries(test_stereo_depth PRIVATE
     yaml-cpp
     Threads::Threads
 )
-set_target_properties(test_stereo_depth PROPERTIES
+set_target_properties(test PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
 )
 
@@ -128,8 +128,8 @@ function(copy_common_data TARGET_NAME)
     )
 endfunction()
 
-copy_common_data(stereo_depth)
-copy_common_data(test_stereo_depth)
+copy_common_data(start)
+copy_common_data(test)
 
 # 为 stereo_calibrator 额外复制 images/calibration
 add_custom_command(TARGET stereo_calibrator POST_BUILD
@@ -159,7 +159,7 @@ add_custom_command(TARGET test_calibration POST_BUILD
     COMMENT "Copying data to test_calibration directory"
 )
 
-install(TARGETS stereo_depth DESTINATION bin)
+install(TARGETS start DESTINATION bin)
 
 message(STATUS "=========================================")
 message(STATUS "OrangePiZero3Bot Configuration")
