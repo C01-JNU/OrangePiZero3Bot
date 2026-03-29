@@ -5,12 +5,8 @@
 
 namespace stereo_depth::preprocess {
 
-Preprocess::Preprocess()
-#ifdef WITH_VULKAN
-    : m_gpu(nullptr)
-#endif
-{
-    LOG_INFO("Preprocess 构造函数, m_gpu={}", reinterpret_cast<void*>(m_gpu));
+Preprocess::Preprocess() {
+    LOG_INFO("Preprocess 构造函数");
 }
 
 #ifndef WITH_VULKAN

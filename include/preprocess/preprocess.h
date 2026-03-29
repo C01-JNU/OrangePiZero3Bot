@@ -38,7 +38,7 @@ private:
 
 #ifdef WITH_VULKAN
     struct GpuResources;
-    GpuResources* m_gpu;
+    GpuResources* m_gpu = nullptr;   // 关键：初始化为 nullptr
 #endif
 };
 
