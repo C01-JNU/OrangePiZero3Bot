@@ -7,7 +7,6 @@
 
 namespace stereo_depth::preprocess {
 
-// 并行处理主体
 class CensusParallel : public cv::ParallelLoopBody {
 public:
     CensusParallel(const cv::Mat& src, cv::Mat& dst,
@@ -29,10 +28,8 @@ public:
                         uchar neighbor = m_src.at<uchar>(y + dy, x + dx);
                         int diff = static_cast<int>(neighbor) - center;
                         if (m_thresh == 0) {
-                            // 标准模式
                             if (neighbor < center) code |= (1 << bit);
                         } else {
-                            // 自适应模式
                             if (abs(diff) > m_thresh) {
                                 if (neighbor < center) code |= (1 << bit);
                             }

@@ -91,7 +91,7 @@ void processFrame(const cv::Mat& left_orig, const cv::Mat& right_orig,
                   bool save_images,
                   cv::Mat& out_left_rect_gray, cv::Mat& out_right_rect_gray,
                   cv::Mat& left_census, cv::Mat& right_census,
-                  cv::Mat& out_left_rect_color) {
+                  cv::Mat& out_left_rect_color, cv::Mat& out_right_rect_color) {
 
     if (save_images) {
         std::string stitched_path = out_orig_dir + "/" + prefix + "_" + std::to_string(index) + "_stitched_orig.png";
@@ -108,32 +108,34 @@ void processFrame(const cv::Mat& left_orig, const cv::Mat& right_orig,
     }
 
     if (rectifier && rectifier->isInitialized()) {
-        // 获取校正映射表
         auto left_maps = rectifier->getLeftMaps();
         auto right_maps = rectifier->getRightMaps();
         auto roi_pair = rectifier->getValidROI();
         cv::Rect roi_left = roi_pair.first;
         cv::Rect roi_right = roi_pair.second;
 
-        // 对灰度图进行校正并裁剪（用于 Census）
+        // 灰度图校正（用于可能的回退，但不使用）
         cv::Mat left_rect_full, right_rect_full;
         cv::remap(left_gray, left_rect_full, left_maps.first, left_maps.second, cv::INTER_LINEAR);
         cv::remap(right_gray, right_rect_full, right_maps.first, right_maps.second, cv::INTER_LINEAR);
         out_left_rect_gray = left_rect_full(roi_left).clone();
         out_right_rect_gray = right_rect_full(roi_right).clone();
 
-        // 对彩色左图进行校正并裁剪（用于显示）
-        cv::Mat left_color_rect_full;
+        // 彩色图校正
+        cv::Mat left_color_rect_full, right_color_rect_full;
         cv::remap(left_orig, left_color_rect_full, left_maps.first, left_maps.second, cv::INTER_LINEAR);
+        cv::remap(right_orig, right_color_rect_full, right_maps.first, right_maps.second, cv::INTER_LINEAR);
         out_left_rect_color = left_color_rect_full(roi_left).clone();
+        out_right_rect_color = right_color_rect_full(roi_right).clone();
     } else {
         out_left_rect_gray = left_gray;
         out_right_rect_gray = right_gray;
         out_left_rect_color = left_orig;
+        out_right_rect_color = right_orig;
     }
 
-    // 前处理（去噪 + Census）
-    if (!preproc.process(out_left_rect_gray, out_right_rect_gray, left_census, right_census)) {
+    // 前处理（去噪 + Census）使用左右彩色图像
+    if (!preproc.process(out_left_rect_color, out_right_rect_color, left_census, right_census)) {
         LOG_ERROR("前处理失败（去噪+Census）");
         return;
     }
@@ -145,6 +147,8 @@ void processFrame(const cv::Mat& left_orig, const cv::Mat& right_orig,
         cv::imwrite(right_census_path, right_census);
         std::string left_color_rect_path = out_orig_dir + "/" + prefix + "_" + std::to_string(index) + "_left_color_rect.png";
         cv::imwrite(left_color_rect_path, out_left_rect_color);
+        std::string right_color_rect_path = out_orig_dir + "/" + prefix + "_" + std::to_string(index) + "_right_color_rect.png";
+        cv::imwrite(right_color_rect_path, out_right_rect_color);
         LOG_DEBUG("Census 图和彩色校正图已保存");
     }
 }
@@ -319,7 +323,7 @@ int main() {
 
             cv::Mat left_rect_gray, right_rect_gray;
             cv::Mat left_census, right_census;
-            cv::Mat left_rect_color;
+            cv::Mat left_rect_color, right_rect_color;
             bool save_images = !streamer.isRunning();
             processFrame(left, right, stitched,
                          rectifier.get(), preproc,
@@ -327,7 +331,7 @@ int main() {
                          save_images,
                          left_rect_gray, right_rect_gray,
                          left_census, right_census,
-                         left_rect_color);
+                         left_rect_color, right_rect_color);
 
             if (streamer.isRunning()) {
                 streamer.sendFrame(0, left_rect_color, frame_count);   // 流0：彩色左校正图
@@ -385,14 +389,14 @@ int main() {
             cv::Mat left_orig = resized(cv::Rect(0, 0, single_width, height)).clone();
             cv::Mat right_orig = resized(cv::Rect(single_width, 0, single_width, height)).clone();
 
-            cv::Mat left_rect_gray, right_rect_gray, left_census, right_census, left_rect_color;
+            cv::Mat left_rect_gray, right_rect_gray, left_census, right_census, left_rect_color, right_rect_color;
             processFrame(left_orig, right_orig, resized,
                          rectifier.get(), preproc,
                          out_orig, "test", index,
                          true,
                          left_rect_gray, right_rect_gray,
                          left_census, right_census,
-                         left_rect_color);
+                         left_rect_color, right_rect_color);
             index++;
         }
         LOG_INFO("批量处理完成，共处理 {} 帧", index);

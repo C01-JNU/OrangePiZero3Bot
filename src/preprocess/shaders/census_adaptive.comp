@@ -1,0 +1,58 @@
+#version 450
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(binding = 0, rgba8) uniform readonly image2D inputImage;
+layout(binding = 1, r16ui) uniform writeonly uimage2D outputImage;
+
+layout(push_constant) uniform PC {
+    int windowWidth;
+    int windowHeight;
+    int imageWidth;
+    int imageHeight;
+    int adaptiveThreshold;
+} pc;
+
+void main() {
+    ivec2 pos = ivec2(gl_GlobalInvocationID.xy);
+    if (pos.x >= pc.imageWidth || pos.y >= pc.imageHeight) return;
+
+    int halfW = pc.windowWidth / 2;
+    int halfH = pc.windowHeight / 2;
+
+    // 边界处理
+    if (pos.x < halfW || pos.x >= pc.imageWidth - halfW ||
+        pos.y < halfH || pos.y >= pc.imageHeight - halfH) {
+        imageStore(outputImage, pos, uvec4(0));
+        return;
+    }
+
+    // 将彩色图转为灰度
+    vec4 pixel = imageLoad(inputImage, pos);
+    float centerGray = 0.299 * pixel.r + 0.587 * pixel.g + 0.114 * pixel.b;
+    int center = int(round(centerGray * 255.0));
+
+    uint code = 0;
+    int bit = 0;
+    for (int dy = -halfH; dy <= halfH; ++dy) {
+        for (int dx = -halfW; dx <= halfW; ++dx) {
+            if (dx == 0 && dy == 0) continue;
+            vec4 neighborPixel = imageLoad(inputImage, pos + ivec2(dx, dy));
+            float neighborGray = 0.299 * neighborPixel.r + 0.587 * neighborPixel.g + 0.114 * neighborPixel.b;
+            int neighbor = int(round(neighborGray * 255.0));
+            int diff = neighbor - center;
+            if (pc.adaptiveThreshold == 0) {
+                // 标准模式
+                if (neighbor < center) code |= (1u << bit);
+            } else {
+                // 自适应模式
+                if (abs(diff) > pc.adaptiveThreshold) {
+                    if (neighbor < center) code |= (1u << bit);
+                }
+            }
+            bit++;
+        }
+    }
+
+    imageStore(outputImage, pos, uvec4(code));
+}

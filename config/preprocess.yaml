@@ -1,23 +1,37 @@
 # ============================================================
 # 前处理模块配置（去噪 + Census）
 # ============================================================
+#
+# 此配置文件同时用于 CPU 和 GPU 后端。
+# GPU 后端仅在使用 cmake.yaml 中 use_gpu: true 编译时启用，
+# 滤波参数（双边滤波的 d, sigma_color, sigma_space）复用此处配置。
+# 工作组大小需与着色器中的 local_size 一致，修改后请同步修改着色器文件。
+# ============================================================
 
 preprocess:
-  # 去噪配置
+  # ---------- 去噪配置 ----------
   denoise:
     # 方法: "none", "median", "bilateral"
+    # 注：GPU 后端仅支持 "bilateral"（双边滤波），其他方法会回退 CPU
     method: "bilateral"
 
-    # 中值滤波参数（仅当 method="median"）
+    # 中值滤波参数（仅当 method="median" 时使用）
     median_ksize: 3
 
-    # 双边滤波参数（仅当 method="bilateral"）
+    # 双边滤波参数（仅当 method="bilateral" 时使用）
     bilateral_d: 9
     bilateral_sigma_color: 50.0
     bilateral_sigma_space: 9.0
 
-  # Census 变换配置
+  # ---------- Census 变换配置 ----------
   census:
     window_width: 5
     window_height: 3
-    adaptive_threshold: 0       # 0 表示标准模式，>0 表示自适应阈值
+    adaptive_threshold: 2
+
+  # ---------- GPU 计算配置（仅 GPU 后端有效）----------
+  gpu:
+    # 工作组大小（需与着色器中的 local_size_x/y 一致）
+    # 修改后请同步修改 src/preprocess/shaders/bilateral.comp 和 census_adaptive.comp
+    workgroup_size_x: 16
+    workgroup_size_y: 16
