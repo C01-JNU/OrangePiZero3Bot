@@ -9,31 +9,8 @@ if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif()
 
-# 从 config/cmake.yaml 读取编译选项
-find_package(yaml-cpp REQUIRED)
-set(CMAKE_CONFIG_FILE ${CMAKE_CURRENT_SOURCE_DIR}/config/cmake.yaml)
-if(EXISTS ${CMAKE_CONFIG_FILE})
-    file(READ ${CMAKE_CONFIG_FILE} CMAKE_YAML_CONTENT)
-    string(REPLACE "\n" ";" CMAKE_YAML_LINES "${CMAKE_YAML_CONTENT}")
-    foreach(line ${CMAKE_YAML_LINES})
-        if(line MATCHES "use_gpu:[ \t]*([^ \t\n]+)")
-            set(USE_GPU_FROM_YAML ${CMAKE_MATCH_1})
-            string(TOLOWER "${USE_GPU_FROM_YAML}" USE_GPU_FROM_YAML)
-            if(USE_GPU_FROM_YAML STREQUAL "true" OR USE_GPU_FROM_YAML STREQUAL "1")
-                set(WITH_VULKAN ON)
-            else()
-                set(WITH_VULKAN OFF)
-            endif()
-        endif()
-    endforeach()
-else()
-    message(WARNING "config/cmake.yaml not found, using default WITH_VULKAN=OFF")
-    set(WITH_VULKAN OFF)
-endif()
-
 find_package(OpenCV REQUIRED)
 find_package(spdlog REQUIRED)
-find_package(yaml-cpp REQUIRED)
 find_package(Threads REQUIRED)
 find_package(Eigen3 QUIET)
 
@@ -48,7 +25,7 @@ add_subdirectory(src/camera)
 add_subdirectory(src/calibration)
 add_subdirectory(src/utils)
 add_subdirectory(src/network)
-add_subdirectory(src/preprocess)          # 新前处理模块
+add_subdirectory(src/preprocess)
 
 # 主程序（改名为 start）
 add_executable(start src/main.cpp)
@@ -60,7 +37,6 @@ target_link_libraries(start PRIVATE
     network
     ${OpenCV_LIBS}
     spdlog::spdlog_header_only
-    yaml-cpp
     Threads::Threads
 )
 set_target_properties(start PROPERTIES
@@ -77,7 +53,6 @@ target_link_libraries(test PRIVATE
     network
     ${OpenCV_LIBS}
     spdlog::spdlog_header_only
-    yaml-cpp
     Threads::Threads
 )
 set_target_properties(test PROPERTIES
@@ -92,7 +67,6 @@ target_link_libraries(stereo_calibrator PRIVATE
     network
     ${OpenCV_LIBS}
     spdlog::spdlog_header_only
-    yaml-cpp
     Threads::Threads
 )
 set_target_properties(stereo_calibrator PROPERTIES
@@ -107,7 +81,6 @@ target_link_libraries(test_calibration PRIVATE
     network
     ${OpenCV_LIBS}
     spdlog::spdlog_header_only
-    yaml-cpp
     Threads::Threads
 )
 set_target_properties(test_calibration PROPERTIES
@@ -167,6 +140,5 @@ message(STATUS "=========================================")
 message(STATUS "Project version: ${PROJECT_VERSION}")
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
 message(STATUS "C++ standard: ${CMAKE_CXX_STANDARD}")
-message(STATUS "WITH_VULKAN (from config/cmake.yaml): ${WITH_VULKAN}")
 message(STATUS "Output binaries: ${CMAKE_BINARY_DIR}/bin")
 message(STATUS "=========================================")

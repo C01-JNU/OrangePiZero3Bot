@@ -12,7 +12,7 @@ preprocess:
   # ---------- 去噪配置 ----------
   denoise:
     # 方法: "none", "median", "bilateral"
-    # 注：GPU 后端仅支持 "bilateral"（双边滤波），其他方法会回退 CPU
+    # 注：去噪是在CPU上运行的
     method: "bilateral"
 
     # 中值滤波参数（仅当 method="median" 时使用）
@@ -30,6 +30,8 @@ preprocess:
     adaptive_threshold: 2
 
   # ---------- GPU 计算配置（仅 GPU 后端有效）----------
+  preprocess_use_gpu: true
+    #在该模块是否使用gpu
   gpu:
     # 工作组大小（需与着色器中的 local_size_x/y 一致）
     # 修改后请同步修改 src/preprocess/shaders/bilateral.comp 和 census_adaptive.comp

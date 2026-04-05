@@ -1,13 +1,13 @@
-# OrangePi Zero3 双目立体视觉系统
+# TotemFish 双目视觉机器人系统
 
-本项目代码由 **DeepSeek** 编写，为香橙派 Zero3 的 **Ubuntu 24.04** 系统打造，提供双目图像采集、立体校正、Census 变换、硬件监控及 UDP 网络传输功能。采用模块化设计，无 ROS 依赖，便于扩展。
+TotemFish 是一个面向香橙派 Zero3 的双目视觉机器人项目，提供双目图像采集、立体校正、Census 变换、硬件监控、UDP 网络传输及机器人控制接口。采用模块化设计，无 ROS 依赖，便于扩展和定制。
 
 ## 功能特性
 
 - **摄像头驱动**：支持 CHUSEI 3D 摄像头和 Mock 模式（从测试图像读取）
 - **立体标定**：提供完整的标定工具，生成 YAML 标定文件
 - **立体校正**：支持 RAW、CROP_ONLY、SCALE_TO_FIT 三种校正模式，输出彩色校正图
-- **Census 变换**：将彩色图自动转换为灰度并生成 Census 特征图，可选 CPU 或 GPU（Vulkan）实现，通过配置文件切换
+- **Census 变换**：将彩色图转换为 Census 特征图（支持 CPU 和 GPU 两种后端，可通过配置切换）
 - **硬件监控**：实时监控 CPU 温度、使用率、内存等信息，通过独立 UDP 流发送
 - **网络传输**：轻量级 UDP 分片传输，支持多流：
   - 流 0：左校正图（彩色 BGR）
@@ -15,14 +15,16 @@
   - 流 2：右眼 Census 图（灰度）
   - 流 3：原始拼接图（彩色）
   - 流 4：硬件状态（二进制）
+- **机器人控制预留**：可扩展电机控制、传感器读取等模块
 - **PC 上位机**：Python Tkinter 图形界面，实时显示多路图像及硬件趋势图，支持保存和 FPS 显示
-- **辅助工具**：提供图像分割脚本，便于准备标定图像
+- **辅助工具**：图像分割脚本，便于准备标定图像
 
 ## 硬件要求
 
 - **香橙派 Zero3**（运行 Ubuntu 24.04 或兼容系统）
 - **双目 USB 摄像头**（如 CHUSEI 3D WebCam）
 - **PC 机**（用于运行上位机，Windows/Linux 均可）
+- **可选：电机驱动板、传感器**（根据机器人扩展需求）
 
 ## 依赖安装（香橙派端）
 
@@ -31,9 +33,11 @@
 sudo apt update
 sudo apt install build-essential cmake git libopencv-dev libspdlog-dev libyaml-cpp-dev \
                  libopenblas-dev libarmadillo-dev
-# 如需 GPU 支持，需安装 Vulkan 相关包
+# 如需 GPU 加速 Census 变换，需安装 Vulkan 相关包
 sudo apt install libvulkan-dev glslang-dev
 ```
+
+> **注意**：即使前处理（去噪）使用 CPU，Census 变换仍可通过 Vulkan GPU 加速。若不需要 GPU 加速，可跳过 Vulkan 包的安装。
 
 ### 编译项目
 ```bash
@@ -43,14 +47,24 @@ make -j4
 ```
 
 编译后生成的可执行文件位于 `build/bin/` 目录下：
-- `stereo_depth`：实时处理主程序
-- `test_stereo_depth`：多功能测试程序（支持实时/批量处理）
+- `start`：机器人主程序（整合视觉处理与运动控制）
+- `test`：多功能测试程序（支持实时/批量处理、校正测试等）
 - `stereo_calibrator`：立体标定工具
 - `test_calibration`：校正测试工具
 
+### 运行时环境变量（使用 GPU 加速时）
+```bash
+export PAN_I_WANT_A_BROKEN_VULKAN_DRIVER=1   # 启用 Mali GPU 的 Vulkan 驱动
+```
+
 ## 配置文件说明
 
-所有配置文件位于 `config/` 目录下。
+所有配置文件位于 `config/` 目录下，采用 YAML 格式，主要包含：
+- `camera.yaml`：摄像头参数
+- `calibration.yaml`：标定参数路径、棋盘格尺寸
+- `network.yaml`：UDP 目标 IP、端口
+- `preprocess.yaml`：Census 窗口大小、自适应阈值、是否使用 GPU 等
+- `system.yaml`：日志级别、硬件监控配置
 
 ## 使用流程
 
@@ -93,19 +107,11 @@ cd build/bin
 编辑 `config/network.yaml` 将 `ip` 改为 PC 的 IP 地址，确保 `enabled: true`。  
 **注意**：PC 端需放行对应端口的 UDP 入站（例如 5000-5010），详见下文。
 
-### 4. 运行实时程序（香橙派端）
-
-> **⚠️ 重要：启用 GPU 加速时必须设置环境变量**  
-> 若需使用 GPU（Vulkan）版本的 Census 变换，请在运行程序前执行：
-> ```bash
-> export PAN_I_WANT_A_BROKEN_VULKAN_DRIVER=1
-> ```
-> 此变量用于启用 Mali GPU 的 Vulkan 驱动（PanVk），否则程序会回退到软件渲染。
-
+### 4. 运行测试程序（香橙派端）
 ```bash
 cd build/bin
-export PAN_I_WANT_A_BROKEN_VULKAN_DRIVER=1   # 启用 GPU 加速
-./test_stereo_depth
+export PAN_I_WANT_A_BROKEN_VULKAN_DRIVER=1   # 可选，启用 GPU
+./test
 ```
 根据提示选择模式：
 - `1`：实时摄像头采集
@@ -119,7 +125,15 @@ export PAN_I_WANT_A_BROKEN_VULKAN_DRIVER=1   # 启用 GPU 加速
 - 流 3：原始拼接图（彩色）
 - 流 4：硬件状态（二进制）
 
-### 5. PC 端上位机使用
+### 5. 运行主程序（含机器人控制）
+```bash
+cd build/bin
+export PAN_I_WANT_A_BROKEN_VULKAN_DRIVER=1   # 可选，启用 GPU
+./start
+```
+主程序在测试程序基础上增加了机器人控制接口（可扩展），启动后会持续运行，直到按 `Ctrl+C` 停止。
+
+### 6. PC 端上位机使用
 
 上位机程序 `udp_viewer.py` 位于项目根目录，支持图像显示和硬件监控。
 
@@ -146,13 +160,13 @@ python udp_viewer.py
   New-NetFirewallRule -DisplayName "Allow OrangePi UDP" -Direction Inbound -Protocol UDP -LocalPort 5000-5010 -Action Allow
   ```
 
-### 6. 停止程序
+### 7. 停止程序
 在香橙派端按 `Ctrl+C` 停止。上位机关闭窗口即可。
 
 ## 辅助工具
 
 ### 图像分割脚本 `split_stereo_images.sh`
-用于将拼接的立体图像（左右图并排）分割为左右眼独立图像，方便标定程序读取。
+用于将拼接的立体图像分割为左右眼独立图像，方便标定程序读取。
 
 **依赖**：ImageMagick（`convert` 和 `identify` 命令）  
 安装方式：`sudo apt install imagemagick`
@@ -181,16 +195,17 @@ cd tools
 - 检查香橙派与 PC 是否在同一网络，IP 配置是否正确。
 - 检查防火墙是否放行了 UDP 端口。
 
-### 上位机显示“不支持的图像类型 4”
-说明上位机版本过旧，请使用项目根目录下最新版 `udp_viewer.py`（已支持 `CV_32S` 类型）。
-
-### GPU 版本无法启用
-- 确保已安装 `libvulkan-dev` 和 `glslang-dev`。
-- 编译时 CMake 会自动检测并启用 GPU 支持（无需额外参数），可通过 CMake 输出确认 `WITH_VULKAN` 状态。
-- **运行时必须设置环境变量** `export PAN_I_WANT_A_BROKEN_VULKAN_DRIVER=1`，否则将回退到软件渲染。
-
 ### 校正后图像仍有黑边
-确保使用 `CROP_ONLY` 模式（`test.cpp` 中已默认），且标定文件中包含准确的 `valid_roi_left/right`（通过 `stereo_calibrator` 生成）。
+确保使用 `CROP_ONLY` 模式（`test.cpp` 和 `start.cpp` 中已默认），且标定文件中包含准确的 `valid_roi_left/right`（通过 `stereo_calibrator` 生成）。
+
+### 摄像头无法打开
+- 检查 `/dev/video0` 是否存在，权限是否正确。
+- 对于 CHUSEI 摄像头，确保已运行初始化脚本（程序会自动调用）。
+
+### GPU 加速无法启用
+- 确保已安装 `libvulkan-dev` 和 `glslang-dev`。
+- 编译时 CMake 会自动检测 Vulkan，无需额外参数。
+- 运行时必须设置环境变量 `export PAN_I_WANT_A_BROKEN_VULKAN_DRIVER=1`。
 
 ## 扩展开发
 
@@ -199,4 +214,10 @@ cd tools
 2. 在 `src/` 下添加 `CMakeLists.txt`。
 3. 在顶层 `CMakeLists.txt` 中添加 `add_subdirectory` 并链接库。
 
-若需增加新的图像流发送，只需在 `test.cpp` 的实时循环中调用 `streamer.sendFrame(新流ID, 图像)`，上位机即可通过“打开新窗口”查看。
+若需增加新的图像流发送，只需在 `test.cpp` 或 `start.cpp` 的实时循环中调用 `streamer.sendFrame(新流ID, 图像)`，上位机即可通过“打开新窗口”查看。
+
+机器人控制部分可在 `start.cpp` 中扩展，通过串口或 GPIO 与下位机通信。
+
+## 项目改名说明
+
+原项目名为 `OrangePiZero3-StereoDepth`，现已更名为 **TotemFish**，以体现其双目视觉机器人的完整定位。相关文档和代码注释正在逐步更新。

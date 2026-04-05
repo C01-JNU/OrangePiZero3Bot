@@ -20,32 +20,34 @@ void main() {
     int halfW = pc.windowWidth / 2;
     int halfH = pc.windowHeight / 2;
 
-    // 边界处理
+    // 中心像素的边界检查（避免窗口超出图像范围）
     if (pos.x < halfW || pos.x >= pc.imageWidth - halfW ||
         pos.y < halfH || pos.y >= pc.imageHeight - halfH) {
         imageStore(outputImage, pos, uvec4(0));
         return;
     }
 
-    // 将彩色图转为灰度
+    // 将彩色图转为灰度（OpenCV 的 BGR2GRAY 公式）
     vec4 pixel = imageLoad(inputImage, pos);
     float centerGray = 0.299 * pixel.r + 0.587 * pixel.g + 0.114 * pixel.b;
     int center = int(round(centerGray * 255.0));
 
-    uint code = 0;
+    uint code = 0u;
     int bit = 0;
     for (int dy = -halfH; dy <= halfH; ++dy) {
         for (int dx = -halfW; dx <= halfW; ++dx) {
             if (dx == 0 && dy == 0) continue;
-            vec4 neighborPixel = imageLoad(inputImage, pos + ivec2(dx, dy));
+            ivec2 samplePos = pos + ivec2(dx, dy);
+            // 钳位到图像边界，防止越界
+            samplePos.x = clamp(samplePos.x, 0, pc.imageWidth - 1);
+            samplePos.y = clamp(samplePos.y, 0, pc.imageHeight - 1);
+            vec4 neighborPixel = imageLoad(inputImage, samplePos);
             float neighborGray = 0.299 * neighborPixel.r + 0.587 * neighborPixel.g + 0.114 * neighborPixel.b;
             int neighbor = int(round(neighborGray * 255.0));
             int diff = neighbor - center;
             if (pc.adaptiveThreshold == 0) {
-                // 标准模式
                 if (neighbor < center) code |= (1u << bit);
             } else {
-                // 自适应模式
                 if (abs(diff) > pc.adaptiveThreshold) {
                     if (neighbor < center) code |= (1u << bit);
                 }
@@ -53,6 +55,5 @@ void main() {
             bit++;
         }
     }
-
     imageStore(outputImage, pos, uvec4(code));
 }

@@ -154,7 +154,7 @@ void processFrame(const cv::Mat& left_orig, const cv::Mat& right_orig,
 }
 
 int main() {
-    Logger::initialize("stereo_test", spdlog::level::info);
+    Logger::initialize("test", spdlog::level::info);
     LOG_INFO("=========================================");
     LOG_INFO("  OrangePiZero3-StereoDepth 测试程序 (Preprocess 版)");
     LOG_INFO("=========================================");
@@ -338,7 +338,7 @@ int main() {
                 streamer.sendFrame(1, left_census, frame_count);       // 流1：左 Census
                 streamer.sendFrame(2, right_census, frame_count);      // 流2：右 Census
                 streamer.sendFrame(3, stitched, frame_count);          // 流3：原始拼接图
-                LOG_DEBUG("网络发送帧 {}", frame_count);
+                // 移除网络发送帧日志
             }
 
             if (hw_monitor.isRunning() && streamer.isRunning()) {
