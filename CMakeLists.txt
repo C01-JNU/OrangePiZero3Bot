@@ -5,6 +5,57 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# ------------------------------------------------------------------
+# 1. 使用 ExternalProject 编译 MNN（只编译推理库 + Vulkan 后端）
+# ------------------------------------------------------------------
+include(ExternalProject)
+
+set(MNN_PREFIX ${CMAKE_BINARY_DIR}/thirdparty/mnn)      # 安装目录
+set(MNN_SOURCE_DIR ${CMAKE_SOURCE_DIR}/thirdparty/MNN)  # 源码位置
+
+# 如果 thirdparty/MNN 不存在，可以自动 git clone（可选）
+if(NOT EXISTS ${MNN_SOURCE_DIR}/CMakeLists.txt)
+    message(FATAL_ERROR "MNN source not found at ${MNN_SOURCE_DIR}. Please run: git submodule update --init --recursive")
+endif()
+
+ExternalProject_Add(MNN_project
+    SOURCE_DIR ${MNN_SOURCE_DIR}
+    BINARY_DIR ${CMAKE_BINARY_DIR}/_deps/mnn-build
+    INSTALL_DIR ${MNN_PREFIX}
+    CMAKE_ARGS
+        -DCMAKE_BUILD_TYPE=Release
+        -DCMAKE_INSTALL_PREFIX=${MNN_PREFIX}
+        -DMNN_BUILD_SHARED_LIBS=ON
+        -DMNN_VULKAN=ON
+        -DMNN_SEP_BUILD=ON          # 分离后端，主库体积小
+        -DMNN_BUILD_MINI=ON         # 最小构建
+        -DMNN_BUILD_CONVERTER=OFF   # 不在设备上编译转换工具
+        -DMNN_OPENCL=OFF
+        -DMNN_CUDA=OFF
+        -DMNN_METAL=OFF
+        -DMNN_ARM82=ON              # 香橙派 Zero3 支持 ARMv8.2
+        -DMNN_USE_THREAD_POOL=ON    # 使用线程池
+    # 编译目标：只编译 MNN 库（不编译 test/benchmark 等）
+    BUILD_COMMAND make -j${CMAKE_HOST_SYSTEM_PROCESSOR_COUNT} MNN
+    INSTALL_COMMAND make install
+)
+
+# ------------------------------------------------------------------
+# 2. 创建导入库目标，供主程序链接
+# ------------------------------------------------------------------
+# 等待 MNN 编译完成后再创建导入库
+add_library(MNN SHARED IMPORTED GLOBAL)
+add_dependencies(MNN MNN_project)
+
+# 设置库文件路径（安装后）
+set(MNN_LIBRARY ${MNN_PREFIX}/lib/libMNN.so)
+set(MNN_VULKAN_LIB ${MNN_PREFIX}/lib/libMNN_Vulkan.so)
+
+set_target_properties(MNN PROPERTIES
+    IMPORTED_LOCATION ${MNN_LIBRARY}
+    INTERFACE_INCLUDE_DIRECTORIES ${MNN_PREFIX}/include
+)
+
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif()
