@@ -1,0 +1,200 @@
+// inference_test_main.cpp
+// 交互式模型转换与测试工具 (中文版)
+// 最后更新: 2026-04-06
+
+#include "inference/yolo_detector.h"
+#include "utils/logger.hpp"
+#include "utils/config.hpp"
+#include <opencv2/opencv.hpp>
+#include <iostream>
+#include <filesystem>
+#include <chrono>
+#include <iomanip>
+
+namespace fs = std::filesystem;
+
+struct TestConfig {
+    std::string input_dir = "images/test";
+    std::string output_dir = "images/output";
+    std::vector<std::string> extensions = {".jpg", ".jpeg", ".png"};
+};
+
+TestConfig loadTestConfig() {
+    TestConfig cfg;
+    auto& global_cfg = stereo_depth::utils::ConfigManager::getInstance().getConfig();
+    cfg.input_dir = global_cfg.get<std::string>("inference.test.input_dir", "images/test");
+    cfg.output_dir = global_cfg.get<std::string>("inference.test.output_dir", "images/output");
+    return cfg;
+}
+
+std::string getExecutablePath() {
+    char buf[1024];
+    ssize_t len = readlink("/proc/self/exe", buf, sizeof(buf)-1);
+    if (len != -1) {
+        buf[len] = '\0';
+        return fs::path(buf).parent_path().string();
+    }
+    return ".";
+}
+
+bool convertModel(const std::string& onnx_path, const std::string& mnn_path) {
+    std::string mnn_convert_cmd;
+    std::string exe_dir = getExecutablePath();
+    std::string candidate = exe_dir + "/../MNNConvert";
+    if (fs::exists(candidate)) {
+        mnn_convert_cmd = candidate;
+    } else {
+        mnn_convert_cmd = "MNNConvert";
+    }
+    std::string cmd = mnn_convert_cmd + " -f ONNX --modelFile " + onnx_path +
+                      " --MNNModel " + mnn_path + " --bizCode biz";
+    std::cout << "执行命令: " << cmd << std::endl;
+    int ret = system(cmd.c_str());
+    if (ret != 0) {
+        std::cerr << "模型转换失败。" << std::endl;
+        return false;
+    }
+    std::cout << "模型已转换为: " << mnn_path << std::endl;
+    return true;
+}
+
+void testModel(const stereo_depth::inference::YOLOConfig& model_cfg,
+               const TestConfig& test_cfg,
+               const std::string& exe_dir) {
+    fs::path input_path = fs::path(exe_dir) / test_cfg.input_dir;
+    fs::path output_path = fs::path(exe_dir) / test_cfg.output_dir;
+    if (!fs::exists(input_path)) {
+        std::cerr << "输入目录不存在: " << input_path << std::endl;
+        return;
+    }
+    fs::create_directories(output_path);
+
+    std::vector<fs::path> images;
+    for (const auto& ext : test_cfg.extensions) {
+        for (const auto& entry : fs::directory_iterator(input_path)) {
+            if (entry.is_regular_file() && entry.path().extension() == ext) {
+                images.push_back(entry.path());
+            }
+        }
+    }
+    if (images.empty()) {
+        std::cout << "在 " << input_path << " 中没有找到图像文件。" << std::endl;
+        return;
+    }
+    std::sort(images.begin(), images.end());
+
+    stereo_depth::inference::YOLODetector detector;
+    if (!detector.init(model_cfg)) {
+        std::cerr << "检测器初始化失败。" << std::endl;
+        return;
+    }
+
+    double total_time = 0.0;
+    int successful = 0;
+    std::vector<double> frame_times;
+
+    for (size_t i = 0; i < images.size(); ++i) {
+        cv::Mat img = cv::imread(images[i].string());
+        if (img.empty()) {
+            std::cerr << "无法读取图像: " << images[i].string() << std::endl;
+            continue;
+        }
+        std::vector<stereo_depth::inference::DetectionBox> boxes;
+        auto start = std::chrono::steady_clock::now();
+        bool ok = detector.detect(img, boxes);
+        auto end = std::chrono::steady_clock::now();
+        if (!ok) {
+            std::cerr << "检测失败: " << images[i].string() << std::endl;
+            continue;
+        }
+        double elapsed_ms = std::chrono::duration<double, std::milli>(end - start).count();
+        frame_times.push_back(elapsed_ms);
+        total_time += elapsed_ms;
+        successful++;
+
+        cv::Mat vis = img.clone();
+        for (const auto& box : boxes) {
+            int x1 = static_cast<int>(box.x1 * img.cols);
+            int y1 = static_cast<int>(box.y1 * img.rows);
+            int x2 = static_cast<int>(box.x2 * img.cols);
+            int y2 = static_cast<int>(box.y2 * img.rows);
+            cv::rectangle(vis, cv::Point(x1, y1), cv::Point(x2, y2), cv::Scalar(0, 255, 0), 2);
+            std::string label = box.class_name + ":" + std::to_string(box.confidence).substr(0,4);
+            cv::putText(vis, label, cv::Point(x1, y1-5), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0,255,0), 1);
+        }
+        fs::path out_file = output_path / (images[i].stem().string() + "_out.jpg");
+        cv::imwrite(out_file.string(), vis);
+        std::cout << "已处理 " << images[i].filename() << " -> " << out_file.filename()
+                  << " (检测到 " << boxes.size() << " 个目标, 耗时 " << std::fixed << std::setprecision(2)
+                  << elapsed_ms << " ms)" << std::endl;
+    }
+
+    if (successful == 0) {
+        std::cout << "没有成功检测的图像。" << std::endl;
+        return;
+    }
+
+    double avg_ms = total_time / successful;
+    double fps = 1000.0 / avg_ms;
+    std::cout << "\n========== 统计信息 ==========" << std::endl;
+    std::cout << "总图像数: " << images.size() << std::endl;
+    std::cout << "成功处理: " << successful << std::endl;
+    std::cout << "平均推理时间: " << std::fixed << std::setprecision(2) << avg_ms << " ms" << std::endl;
+    std::cout << "平均帧率: " << std::fixed << std::setprecision(2) << fps << " FPS" << std::endl;
+    std::cout << "结果保存在: " << output_path << std::endl;
+}
+
+int main() {
+    stereo_depth::utils::Logger::initialize("inference_test", spdlog::level::info);
+
+    std::string config_path = getExecutablePath() + "/config";
+    if (!stereo_depth::utils::ConfigManager::getInstance().loadGlobalConfig(config_path)) {
+        std::cerr << "警告: 无法从 " << config_path << " 加载配置，将使用默认值。" << std::endl;
+    }
+
+    stereo_depth::inference::YOLOConfig model_cfg;
+    auto& cfg = stereo_depth::utils::ConfigManager::getInstance().getConfig();
+    model_cfg.model_path = cfg.get<std::string>("inference.model.path", "models/yolo26n.mnn");
+    model_cfg.input_width = cfg.get<int>("inference.model.input_width", 0);
+    model_cfg.input_height = cfg.get<int>("inference.model.input_height", 0);
+    model_cfg.confidence_threshold = cfg.get<float>("inference.confidence_threshold", 0.25f);
+    model_cfg.nms_threshold = cfg.get<float>("inference.nms_threshold", 0.45f);
+    model_cfg.num_classes = cfg.get<int>("inference.num_classes", 80);
+    model_cfg.use_gpu = cfg.get<bool>("inference.use_gpu", false);
+    model_cfg.letterbox = cfg.get<bool>("inference.letterbox", true);
+
+    TestConfig test_cfg = loadTestConfig();
+    std::string exe_dir = getExecutablePath();
+
+    int choice = -1;
+    while (choice != 0) {
+        std::cout << "\n===== 模型推理测试工具 =====" << std::endl;
+        std::cout << "1. 转换 ONNX 模型为 MNN 格式" << std::endl;
+        std::cout << "2. 批量测试模型（从目录读取图像）" << std::endl;
+        std::cout << "0. 退出" << std::endl;
+        std::cout << "请输入选项: ";
+        std::cin >> choice;
+
+        if (choice == 1) {
+            std::string onnx_path, mnn_path;
+            std::cout << "输入 ONNX 模型路径: ";
+            std::cin >> onnx_path;
+            std::cout << "输出 MNN 模型路径（默认: " << model_cfg.model_path << "）: ";
+            std::cin.ignore();
+            std::getline(std::cin, mnn_path);
+            if (mnn_path.empty()) mnn_path = model_cfg.model_path;
+            if (!convertModel(onnx_path, mnn_path)) {
+                std::cerr << "转换失败。" << std::endl;
+            } else {
+                model_cfg.model_path = mnn_path;
+            }
+        } else if (choice == 2) {
+            testModel(model_cfg, test_cfg, exe_dir);
+        } else if (choice == 0) {
+            std::cout << "退出程序。" << std::endl;
+        } else {
+            std::cout << "无效选项，请重新输入。" << std::endl;
+        }
+    }
+    return 0;
+}

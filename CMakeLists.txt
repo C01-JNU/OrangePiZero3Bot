@@ -73,7 +73,11 @@ add_subdirectory(src/calibration)
 add_subdirectory(src/utils)
 add_subdirectory(src/network)
 add_subdirectory(src/preprocess)
+add_subdirectory(src/inference)
 
+# ------------------------------------------------------------------
+# 3. 可执行程序（主程序、测试、标定等）
+# ------------------------------------------------------------------
 # 主程序（start）
 add_executable(start src/main.cpp)
 target_link_libraries(start PRIVATE
@@ -82,6 +86,7 @@ target_link_libraries(start PRIVATE
     preprocess
     utils
     network
+    inference
     ${OpenCV_LIBS}
     spdlog::spdlog_header_only
     Threads::Threads
@@ -98,6 +103,7 @@ target_link_libraries(test PRIVATE
     preprocess
     utils
     network
+    inference
     ${OpenCV_LIBS}
     spdlog::spdlog_header_only
     Threads::Threads
@@ -134,7 +140,9 @@ set_target_properties(test_calibration PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
 )
 
-# 辅助函数：复制公共数据
+# ------------------------------------------------------------------
+# 4. 辅助函数：复制公共数据（config, images, calibration_results）
+# ------------------------------------------------------------------
 function(copy_common_data TARGET_NAME)
     add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:${TARGET_NAME}>/config
@@ -144,14 +152,35 @@ function(copy_common_data TARGET_NAME)
         COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:${TARGET_NAME}>/images/test
         COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/images/test $<TARGET_FILE_DIR:${TARGET_NAME}>/images/test
         COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:${TARGET_NAME}>/images/output
-        COMMENT "Copying common data to ${TARGET_NAME} directory"
+        COMMENT "复制公共数据到 ${TARGET_NAME} 目录"
     )
 endfunction()
 
+# 为 start 和 test 复制公共数据
 copy_common_data(start)
 copy_common_data(test)
 
-# 为 stereo_calibrator 额外复制 images/calibration
+# ------------------------------------------------------------------
+# 5. 辅助函数：复制模型文件（若存在）
+# ------------------------------------------------------------------
+function(copy_models TARGET_NAME)
+    if(EXISTS ${CMAKE_SOURCE_DIR}/models)
+        add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:${TARGET_NAME}>/models
+            COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/models $<TARGET_FILE_DIR:${TARGET_NAME}>/models/
+            COMMENT "复制模型文件到 ${TARGET_NAME} 目录"
+        )
+    else()
+        message(STATUS "未找到 models 目录，跳过模型复制（请手动将模型文件放入 bin/models 下）")
+    endif()
+endfunction()
+
+copy_models(start)
+copy_models(test)
+
+# ------------------------------------------------------------------
+# 6. 为 stereo_calibrator 和 test_calibration 额外复制 calibration 图像
+# ------------------------------------------------------------------
 add_custom_command(TARGET stereo_calibrator POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:stereo_calibrator>/config
     COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/config $<TARGET_FILE_DIR:stereo_calibrator>/config/
@@ -162,10 +191,9 @@ add_custom_command(TARGET stereo_calibrator POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:stereo_calibrator>/images/calibration
     COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/images/calibration $<TARGET_FILE_DIR:stereo_calibrator>/images/calibration
     COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:stereo_calibrator>/images/output
-    COMMENT "Copying data to stereo_calibrator directory"
+    COMMENT "复制标定数据到 stereo_calibrator 目录"
 )
 
-# 为 test_calibration 额外复制 images/calibration
 add_custom_command(TARGET test_calibration POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:test_calibration>/config
     COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/config $<TARGET_FILE_DIR:test_calibration>/config/
@@ -176,7 +204,7 @@ add_custom_command(TARGET test_calibration POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:test_calibration>/images/calibration
     COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/images/calibration $<TARGET_FILE_DIR:test_calibration>/images/calibration
     COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:test_calibration>/images/output
-    COMMENT "Copying data to test_calibration directory"
+    COMMENT "复制标定数据到 test_calibration 目录"
 )
 
 install(TARGETS start DESTINATION bin)
