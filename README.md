@@ -43,7 +43,7 @@ sudo apt install libvulkan-dev glslang-dev
 ```bash
 mkdir build && cd build
 cmake ..
-make -j4
+make -j3
 ```
 
 编译后生成的可执行文件位于 `build/bin/` 目录下：

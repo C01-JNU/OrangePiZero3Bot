@@ -13,7 +13,6 @@ include(ExternalProject)
 set(MNN_PREFIX ${CMAKE_BINARY_DIR}/thirdparty/mnn)      # 安装目录
 set(MNN_SOURCE_DIR ${CMAKE_SOURCE_DIR}/thirdparty/MNN)  # 源码位置
 
-# 如果 thirdparty/MNN 不存在，可以自动 git clone（可选）
 if(NOT EXISTS ${MNN_SOURCE_DIR}/CMakeLists.txt)
     message(FATAL_ERROR "MNN source not found at ${MNN_SOURCE_DIR}. Please run: git submodule update --init --recursive")
 endif()
@@ -27,27 +26,24 @@ ExternalProject_Add(MNN_project
         -DCMAKE_INSTALL_PREFIX=${MNN_PREFIX}
         -DMNN_BUILD_SHARED_LIBS=ON
         -DMNN_VULKAN=ON
-        -DMNN_SEP_BUILD=ON          # 分离后端，主库体积小
-        -DMNN_BUILD_MINI=ON         # 最小构建
-        -DMNN_BUILD_CONVERTER=OFF   # 不在设备上编译转换工具
+        -DMNN_SEP_BUILD=ON
+        -DMNN_BUILD_MINI=ON
+        -DMNN_BUILD_CONVERTER=ON
         -DMNN_OPENCL=OFF
         -DMNN_CUDA=OFF
         -DMNN_METAL=OFF
-        -DMNN_ARM82=ON              # 香橙派 Zero3 支持 ARMv8.2
-        -DMNN_USE_THREAD_POOL=ON    # 使用线程池
-    # 编译目标：只编译 MNN 库（不编译 test/benchmark 等）
-    BUILD_COMMAND make -j${CMAKE_HOST_SYSTEM_PROCESSOR_COUNT} MNN
-    INSTALL_COMMAND make install
+        -DMNN_ARM82=ON
+        -DMNN_USE_THREAD_POOL=ON
+    BUILD_COMMAND $(MAKE) MNN
+    INSTALL_COMMAND $(MAKE) install
 )
 
 # ------------------------------------------------------------------
 # 2. 创建导入库目标，供主程序链接
 # ------------------------------------------------------------------
-# 等待 MNN 编译完成后再创建导入库
 add_library(MNN SHARED IMPORTED GLOBAL)
 add_dependencies(MNN MNN_project)
 
-# 设置库文件路径（安装后）
 set(MNN_LIBRARY ${MNN_PREFIX}/lib/libMNN.so)
 set(MNN_VULKAN_LIB ${MNN_PREFIX}/lib/libMNN_Vulkan.so)
 
@@ -78,7 +74,7 @@ add_subdirectory(src/utils)
 add_subdirectory(src/network)
 add_subdirectory(src/preprocess)
 
-# 主程序（改名为 start）
+# 主程序（start）
 add_executable(start src/main.cpp)
 target_link_libraries(start PRIVATE
     camera
@@ -94,7 +90,7 @@ set_target_properties(start PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
 )
 
-# 测试程序（改名为 test）
+# 测试程序（test）
 add_executable(test src/test.cpp)
 target_link_libraries(test PRIVATE
     camera
@@ -138,7 +134,7 @@ set_target_properties(test_calibration PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
 )
 
-# 定义辅助函数来复制公共数据
+# 辅助函数：复制公共数据
 function(copy_common_data TARGET_NAME)
     add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:${TARGET_NAME}>/config
@@ -186,7 +182,7 @@ add_custom_command(TARGET test_calibration POST_BUILD
 install(TARGETS start DESTINATION bin)
 
 message(STATUS "=========================================")
-message(STATUS "OrangePiZero3Bot Configuration")
+message(STATUS "FishTotem Configuration")
 message(STATUS "=========================================")
 message(STATUS "Project version: ${PROJECT_VERSION}")
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
