@@ -19,7 +19,6 @@ set_target_properties(inference PROPERTIES
     CXX_STANDARD_REQUIRED ON
 )
 
-# 测试可执行程序
 add_executable(test_inference test_inference_main.cpp)
 target_link_libraries(test_inference PRIVATE
     inference
@@ -31,3 +30,10 @@ target_link_libraries(test_inference PRIVATE
 set_target_properties(test_inference PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
 )
+
+if(COMMAND copy_common_data)
+    copy_common_data(test_inference)
+endif()
+if(COMMAND copy_models)
+    copy_models(test_inference)
+endif()

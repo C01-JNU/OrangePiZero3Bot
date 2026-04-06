@@ -1,6 +1,27 @@
-// inference_test_main.cpp
+// Copyright (C) 2026 C01-JNU
+// SPDX-License-Identifier: GPL-3.0-only
+//
+// This file is part of FishTotem.
+//
+// FishTotem is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// FishTotem is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with FishTotem. If not, see <https://www.gnu.org/licenses/>.
+
+
+// test_inference_main.cpp
 // 交互式模型转换与测试工具 (中文版)
 // 最后更新: 2026-04-06
+// 支持 .pt -> ONNX -> MNN 全流程转换
+// 路径支持：相对路径（相对于可执行文件目录）和绝对路径，自动去除引号和空白
 
 #include "inference/yolo_detector.h"
 #include "utils/logger.hpp"
@@ -10,6 +31,9 @@
 #include <filesystem>
 #include <chrono>
 #include <iomanip>
+#include <fstream>
+#include <algorithm>
+#include <cctype>
 
 namespace fs = std::filesystem;
 
@@ -37,14 +61,77 @@ std::string getExecutablePath() {
     return ".";
 }
 
-bool convertModel(const std::string& onnx_path, const std::string& mnn_path) {
+std::string trim(const std::string& s) {
+    size_t start = s.find_first_not_of(" \t\n\r");
+    if (start == std::string::npos) return "";
+    size_t end = s.find_last_not_of(" \t\n\r");
+    return s.substr(start, end - start + 1);
+}
+
+std::string stripQuotes(const std::string& s) {
+    std::string result = trim(s);
+    if (result.empty()) return result;
+    if (result.front() == '"' || result.front() == '\'')
+        result.erase(0, 1);
+    if (!result.empty() && (result.back() == '"' || result.back() == '\''))
+        result.pop_back();
+    return result;
+}
+
+std::string resolvePath(const std::string& userInput, const std::string& exeDir) {
+    std::string path = stripQuotes(userInput);
+    if (path.empty()) return "";
+    fs::path p(path);
+    if (p.is_absolute()) {
+        return p.string();
+    } else {
+        return (fs::path(exeDir) / p).lexically_normal().string();
+    }
+}
+
+bool commandExists(const std::string& cmd) {
+    return system(("which " + cmd + " > /dev/null 2>&1").c_str()) == 0;
+}
+
+bool convertPtToOnnx(const std::string& pt_path, const std::string& onnx_path, int imgsz = 640) {
+    if (!fs::exists(pt_path)) {
+        std::cerr << "错误: PyTorch 模型文件不存在: " << pt_path << std::endl;
+        return false;
+    }
+    if (!commandExists("yolo")) {
+        std::cerr << "错误: 未找到 'yolo' 命令。请先安装 ultralytics: pip install ultralytics" << std::endl;
+        return false;
+    }
+    std::string cmd = "yolo export model=" + pt_path + " format=onnx imgsz=" + std::to_string(imgsz) + " save_dir=" + fs::path(onnx_path).parent_path().string();
+    std::cout << "执行命令: " << cmd << std::endl;
+    int ret = system(cmd.c_str());
+    if (ret != 0) {
+        std::cerr << "模型转换失败。" << std::endl;
+        return false;
+    }
+    fs::path default_onnx = fs::path(pt_path).stem().string() + ".onnx";
+    if (fs::exists(default_onnx) && default_onnx != onnx_path) {
+        fs::rename(default_onnx, onnx_path);
+    }
+    std::cout << "ONNX 模型已保存至: " << onnx_path << std::endl;
+    return true;
+}
+
+bool convertOnnxToMnn(const std::string& onnx_path, const std::string& mnn_path) {
+    if (!fs::exists(onnx_path)) {
+        std::cerr << "错误: ONNX 文件不存在: " << onnx_path << std::endl;
+        return false;
+    }
     std::string mnn_convert_cmd;
     std::string exe_dir = getExecutablePath();
     std::string candidate = exe_dir + "/../MNNConvert";
     if (fs::exists(candidate)) {
         mnn_convert_cmd = candidate;
-    } else {
+    } else if (commandExists("MNNConvert")) {
         mnn_convert_cmd = "MNNConvert";
+    } else {
+        std::cerr << "错误: 未找到 MNNConvert 工具。请确保已编译 MNN 并生成 MNNConvert。" << std::endl;
+        return false;
     }
     std::string cmd = mnn_convert_cmd + " -f ONNX --modelFile " + onnx_path +
                       " --MNNModel " + mnn_path + " --bizCode biz";
@@ -54,8 +141,56 @@ bool convertModel(const std::string& onnx_path, const std::string& mnn_path) {
         std::cerr << "模型转换失败。" << std::endl;
         return false;
     }
-    std::cout << "模型已转换为: " << mnn_path << std::endl;
+    std::cout << "MNN 模型已保存至: " << mnn_path << std::endl;
     return true;
+}
+
+void convertModelInteractive() {
+    std::string exeDir = getExecutablePath();
+    std::string input_path_str, output_path_str;
+    std::cout << "请输入模型文件路径 (.pt 或 .onnx): ";
+    std::cin.ignore();
+    std::getline(std::cin, input_path_str);
+    std::string input_path = resolvePath(input_path_str, exeDir);
+    if (!fs::exists(input_path)) {
+        std::cerr << "文件不存在: " << input_path << std::endl;
+        return;
+    }
+    fs::path in_path(input_path);
+    std::string ext = in_path.extension().string();
+    if (ext != ".pt" && ext != ".onnx") {
+        std::cerr << "不支持的文件格式，请提供 .pt 或 .onnx 文件。" << std::endl;
+        return;
+    }
+    std::cout << "请输入输出文件路径 (留空则自动生成): ";
+    std::getline(std::cin, output_path_str);
+    std::string output_path = resolvePath(output_path_str, exeDir);
+    if (output_path.empty()) {
+        if (ext == ".pt") {
+            output_path = (in_path.parent_path() / (in_path.stem().string() + ".onnx")).string();
+        } else {
+            output_path = (in_path.parent_path() / (in_path.stem().string() + ".mnn")).string();
+        }
+    }
+    if (ext == ".pt") {
+        if (!convertPtToOnnx(input_path, output_path)) {
+            std::cerr << "转换失败。" << std::endl;
+            return;
+        }
+        std::string answer;
+        std::cout << "是否继续转换为 MNN 格式？(y/n): ";
+        std::getline(std::cin, answer);
+        if (answer == "y" || answer == "Y") {
+            std::string mnn_path_str;
+            std::cout << "输入 MNN 输出路径 (默认: " << fs::path(output_path).stem().string() + ".mnn" << "): ";
+            std::getline(std::cin, mnn_path_str);
+            std::string mnn_path = resolvePath(mnn_path_str, exeDir);
+            if (mnn_path.empty()) mnn_path = (fs::path(output_path).parent_path() / (fs::path(output_path).stem().string() + ".mnn")).string();
+            convertOnnxToMnn(output_path, mnn_path);
+        }
+    } else if (ext == ".onnx") {
+        convertOnnxToMnn(input_path, output_path);
+    }
 }
 
 void testModel(const stereo_depth::inference::YOLOConfig& model_cfg,
@@ -145,7 +280,7 @@ void testModel(const stereo_depth::inference::YOLOConfig& model_cfg,
 }
 
 int main() {
-    stereo_depth::utils::Logger::initialize("inference_test", spdlog::level::info);
+    stereo_depth::utils::Logger::initialize("test_inference", spdlog::level::info);
 
     std::string config_path = getExecutablePath() + "/config";
     if (!stereo_depth::utils::ConfigManager::getInstance().loadGlobalConfig(config_path)) {
@@ -169,25 +304,15 @@ int main() {
     int choice = -1;
     while (choice != 0) {
         std::cout << "\n===== 模型推理测试工具 =====" << std::endl;
-        std::cout << "1. 转换 ONNX 模型为 MNN 格式" << std::endl;
+        std::cout << "1. 转换模型格式 (.pt -> ONNX 或 ONNX -> MNN)" << std::endl;
         std::cout << "2. 批量测试模型（从目录读取图像）" << std::endl;
         std::cout << "0. 退出" << std::endl;
         std::cout << "请输入选项: ";
         std::cin >> choice;
+        std::cin.ignore();
 
         if (choice == 1) {
-            std::string onnx_path, mnn_path;
-            std::cout << "输入 ONNX 模型路径: ";
-            std::cin >> onnx_path;
-            std::cout << "输出 MNN 模型路径（默认: " << model_cfg.model_path << "）: ";
-            std::cin.ignore();
-            std::getline(std::cin, mnn_path);
-            if (mnn_path.empty()) mnn_path = model_cfg.model_path;
-            if (!convertModel(onnx_path, mnn_path)) {
-                std::cerr << "转换失败。" << std::endl;
-            } else {
-                model_cfg.model_path = mnn_path;
-            }
+            convertModelInteractive();
         } else if (choice == 2) {
             testModel(model_cfg, test_cfg, exe_dir);
         } else if (choice == 0) {
