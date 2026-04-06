@@ -23,17 +23,21 @@ preprocess:
     bilateral_sigma_color: 50.0
     bilateral_sigma_space: 9.0
 
-  # ---------- Census 变换配置 ----------
+  # ---------- Census/Rank 变换配置 ----------
   census:
     window_width: 5
     window_height: 3
-    adaptive_threshold: 2
+    adaptive_threshold: 2  #这个参数是 Census变换 和 Rank变换 共用的
 
   # ---------- GPU 计算配置（仅 GPU 后端有效）----------
   preprocess_use_gpu: true
     #在该模块是否使用gpu
   gpu:
     # 工作组大小（需与着色器中的 local_size_x/y 一致）
-    # 修改后请同步修改 src/preprocess/shaders/bilateral.comp 和 census_adaptive.comp
+    # 修改后请同步修改 src/preprocess/shaders/rank_transform.comp 和 census_adaptive.comp
     workgroup_size_x: 16
     workgroup_size_y: 16
+
+  # ---------- 变换类型配置 ----------
+  # 可选值: "census", "rank"
+  transform_type: "rank"

@@ -12,32 +12,36 @@ Preprocess::~Preprocess() {
 
 bool Preprocess::initGpu() {
     auto& cfg = utils::ConfigManager::getInstance().getConfig();
-    // 必须从配置读取，不允许硬编码默认值，如果缺失则报错
-    if (!cfg.has("preprocess.census.window_width")) {
-        LOG_ERROR("配置缺失: preprocess.census.window_width");
-        return false;
-    }
-    if (!cfg.has("preprocess.census.window_height")) {
-        LOG_ERROR("配置缺失: preprocess.census.window_height");
-        return false;
-    }
-    if (!cfg.has("preprocess.census.adaptive_threshold")) {
-        LOG_ERROR("配置缺失: preprocess.census.adaptive_threshold");
+    if (!cfg.has("preprocess.census.window_width") ||
+        !cfg.has("preprocess.census.window_height") ||
+        !cfg.has("preprocess.census.adaptive_threshold")) {
+        LOG_ERROR("配置缺失: 需要 preprocess.census 相关参数");
         return false;
     }
     int windowWidth = cfg.get<int>("preprocess.census.window_width");
     int windowHeight = cfg.get<int>("preprocess.census.window_height");
     int adaptiveThreshold = cfg.get<int>("preprocess.census.adaptive_threshold");
 
-    // 验证参数有效性
+    // 读取变换类型
+    std::string transformTypeStr = cfg.get<std::string>("preprocess.transform_type", "census");
+    TransformType type;
+    if (transformTypeStr == "census") {
+        type = TransformType::CENSUS;
+    } else if (transformTypeStr == "rank") {
+        type = TransformType::RANK;
+    } else {
+        LOG_ERROR("未知的变换类型: {}，支持 census/rank", transformTypeStr);
+        return false;
+    }
+
     if (windowWidth <= 0 || windowWidth % 2 == 0 || windowHeight <= 0 || windowHeight % 2 == 0) {
-        LOG_ERROR("Census 窗口尺寸必须为正奇数");
+        LOG_ERROR("窗口尺寸必须为正奇数");
         return false;
     }
 
     m_censusGpu = new GpuCensusTransform();
-    if (!m_censusGpu->init(windowWidth, windowHeight, adaptiveThreshold)) {
-        LOG_ERROR("GPU Census 初始化失败");
+    if (!m_censusGpu->init(windowWidth, windowHeight, adaptiveThreshold, type)) {
+        LOG_ERROR("GPU 变换初始化失败");
         delete m_censusGpu;
         m_censusGpu = nullptr;
         return false;
@@ -48,11 +52,11 @@ bool Preprocess::initGpu() {
 bool Preprocess::processGpu(const cv::Mat& left, const cv::Mat& right,
                             cv::Mat& leftCensus, cv::Mat& rightCensus) {
     if (!m_censusGpu) {
-        LOG_ERROR("GPU Census 未初始化");
+        LOG_ERROR("GPU 变换未初始化");
         return false;
     }
 
-    // 先 CPU 去噪（彩色图转灰度去噪）
+    // CPU 去噪（彩色图转灰度去噪）
     cv::Mat leftGray, rightGray;
     cv::cvtColor(left, leftGray, cv::COLOR_BGR2GRAY);
     cv::cvtColor(right, rightGray, cv::COLOR_BGR2GRAY);
@@ -64,15 +68,14 @@ bool Preprocess::processGpu(const cv::Mat& left, const cv::Mat& right,
         return false;
     }
 
-    // 去噪后的灰度图转换为彩色图（三通道相同）供 GPU Census 使用
+    // 去噪后的灰度图转换为彩色图（三通道相同）供 GPU 变换使用
     cv::Mat leftDenoisedColor, rightDenoisedColor;
     cv::cvtColor(leftDenoised, leftDenoisedColor, cv::COLOR_GRAY2BGR);
     cv::cvtColor(rightDenoised, rightDenoisedColor, cv::COLOR_GRAY2BGR);
 
-    // GPU Census
     if (!m_censusGpu->process(leftDenoisedColor, leftCensus) ||
         !m_censusGpu->process(rightDenoisedColor, rightCensus)) {
-        LOG_ERROR("Census GPU 失败");
+        LOG_ERROR("GPU 变换失败");
         return false;
     }
     return true;
@@ -84,12 +87,14 @@ void* Preprocess::getFilteredImageHandle() const {
     }
     return nullptr;
 }
+
 int Preprocess::getFilteredImageWidth() const {
     if (m_censusGpu) {
         return m_censusGpu->getWidth();
     }
     return 0;
 }
+
 int Preprocess::getFilteredImageHeight() const {
     if (m_censusGpu) {
         return m_censusGpu->getHeight();

@@ -9,7 +9,7 @@ Preprocess::Preprocess() : m_censusGpu(nullptr) {
     LOG_INFO("Preprocess 构造函数");
 }
 
-// 析构函数在 preprocess_gpu.cpp 中定义（因为需要完整类型）
+// 析构函数在 preprocess_gpu.cpp 中定义（需要 GpuCensusTransform 完整类型）
 
 bool Preprocess::initFromConfig() {
     LOG_INFO("Preprocess::initFromConfig 开始");
@@ -25,6 +25,18 @@ bool Preprocess::initFromConfig() {
     censusParams.adaptive_threshold = cfg.get<int>("preprocess.census.adaptive_threshold", 2);
     censusParams.workgroup_size_x = cfg.get<int>("preprocess.gpu.workgroup_size_x", 16);
     censusParams.workgroup_size_y = cfg.get<int>("preprocess.gpu.workgroup_size_y", 16);
+
+    // 读取变换类型
+    std::string transformTypeStr = cfg.get<std::string>("preprocess.transform_type", "census");
+    if (transformTypeStr == "census") {
+        censusParams.transform_type = TransformType::CENSUS;
+    } else if (transformTypeStr == "rank") {
+        censusParams.transform_type = TransformType::RANK;
+    } else {
+        LOG_WARN("未知的 transform_type: {}，使用默认 Census", transformTypeStr);
+        censusParams.transform_type = TransformType::CENSUS;
+    }
+
     if (!m_censusCpu.init(censusParams)) {
         LOG_ERROR("Census CPU 初始化失败");
         return false;
@@ -32,12 +44,12 @@ bool Preprocess::initFromConfig() {
 
     m_useGpuConfig = cfg.get<bool>("preprocess.preprocess_use_gpu", false);
     if (m_useGpuConfig) {
-        LOG_INFO("配置要求使用 GPU 后端，尝试初始化 GPU Census 模块...");
+        LOG_INFO("配置要求使用 GPU 后端，尝试初始化 GPU 变换模块...");
         if (initGpu()) {
             m_gpuAvailable = true;
-            LOG_INFO("GPU Census 模块初始化成功，将使用 GPU 加速 Census");
+            LOG_INFO("GPU 变换模块初始化成功，将使用 GPU 加速");
         } else {
-            LOG_WARN("GPU Census 模块初始化失败，将回退到 CPU 后端");
+            LOG_WARN("GPU 变换模块初始化失败，将回退到 CPU 后端");
             m_gpuAvailable = false;
         }
     } else {
@@ -97,7 +109,5 @@ bool Preprocess::processCpu(const cv::Mat& left, const cv::Mat& right,
     LOG_DEBUG("CPU 处理完成");
     return true;
 }
-
-// GPU 相关函数的实现都在 preprocess_gpu.cpp 中，这里不需要提供空实现
 
 } // namespace stereo_depth::preprocess

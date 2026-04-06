@@ -33,8 +33,7 @@ void main() {
     vec4 centerColor = imageLoad(inputImage, pos);
     int center = rgbToGray(centerColor);
     int thresh = pc.adaptiveThreshold;
-    uint code = 0u;
-    int bit = 0;
+    uint count = 0u;
 
     for (int dy = -halfH; dy <= halfH; ++dy) {
         for (int dx = -halfW; dx <= halfW; ++dx) {
@@ -46,14 +45,13 @@ void main() {
             int neighbor = rgbToGray(neighborColor);
             int diff = neighbor - center;
             if (thresh == 0) {
-                if (neighbor < center) code |= (1u << bit);
+                if (neighbor < center) ++count;
             } else {
                 if (abs(diff) > thresh) {
-                    if (neighbor < center) code |= (1u << bit);
+                    if (neighbor < center) ++count;
                 }
             }
-            ++bit;
         }
     }
-    imageStore(outputImage, pos, uvec4(code));
+    imageStore(outputImage, pos, uvec4(count));
 }

@@ -68,6 +68,7 @@ struct GpuCensusTransform::Impl {
     int windowWidth = 0;
     int windowHeight = 0;
     int adaptiveThreshold = 0;
+    TransformType transformType = TransformType::CENSUS;
     int curWidth = 0;
     int curHeight = 0;
     bool initialized = false;
@@ -233,17 +234,19 @@ struct GpuCensusTransform::Impl {
 GpuCensusTransform::GpuCensusTransform() : m_impl(std::make_unique<Impl>()) {}
 GpuCensusTransform::~GpuCensusTransform() = default;
 
-bool GpuCensusTransform::init(int windowWidth, int windowHeight, int adaptiveThreshold) {
+bool GpuCensusTransform::init(int windowWidth, int windowHeight, int adaptiveThreshold, TransformType type) {
     auto& impl = *m_impl;
     impl.windowWidth = windowWidth;
     impl.windowHeight = windowHeight;
     impl.adaptiveThreshold = adaptiveThreshold;
+    impl.transformType = type;
 
     if (impl.windowWidth <= 0 || impl.windowWidth % 2 == 0 || impl.windowHeight <= 0 || impl.windowHeight % 2 == 0) {
-        LOG_ERROR("Census 窗口尺寸必须为正奇数");
+        LOG_ERROR("窗口尺寸必须为正奇数");
         return false;
     }
 
+    // 创建 Vulkan 实例
     VkApplicationInfo appInfo{};
     appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
     appInfo.pApplicationName = "CensusTransform";
@@ -273,7 +276,7 @@ bool GpuCensusTransform::init(int windowWidth, int windowHeight, int adaptiveThr
     impl.physicalDevice = devices[selected];
     VkPhysicalDeviceProperties props;
     vkGetPhysicalDeviceProperties(impl.physicalDevice, &props);
-    LOG_INFO("Census GPU 选中设备: {}", props.deviceName);
+    LOG_INFO("GPU 选中设备: {}", props.deviceName);
 
     uint32_t qfCount = 0;
     vkGetPhysicalDeviceQueueFamilyProperties(impl.physicalDevice, &qfCount, nullptr);
@@ -329,8 +332,14 @@ bool GpuCensusTransform::init(int windowWidth, int windowHeight, int adaptiveThr
     if (!impl.checkResult(vkCreateSampler(impl.device, &sci, nullptr, &impl.sampler), "创建采样器"))
         return false;
 
+    // 根据变换类型选择着色器
     std::string exeDir = getExeDir();
-    std::string shaderPath = exeDir + "/shaders/census_adaptive.comp.spv";
+    std::string shaderPath;
+    if (impl.transformType == TransformType::CENSUS) {
+        shaderPath = exeDir + "/shaders/census_adaptive.comp.spv";
+    } else {
+        shaderPath = exeDir + "/shaders/rank_transform.comp.spv";
+    }
     std::vector<char> shaderCode;
     try {
         shaderCode = readFile(shaderPath);
@@ -341,6 +350,7 @@ bool GpuCensusTransform::init(int windowWidth, int windowHeight, int adaptiveThr
     if (!impl.createShaderModule(shaderCode))
         return false;
 
+    // 描述符集布局
     std::array<VkDescriptorSetLayoutBinding, 2> bindings{};
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
@@ -403,19 +413,20 @@ bool GpuCensusTransform::init(int windowWidth, int windowHeight, int adaptiveThr
         return false;
 
     impl.initialized = true;
-    LOG_INFO("Census GPU 模块初始化成功（无图像资源）");
+    LOG_INFO("GPU 变换模块初始化成功（类型: {}）", (impl.transformType == TransformType::CENSUS ? "Census" : "Rank"));
     return true;
 }
 
-bool GpuCensusTransform::process(const cv::Mat& inputBgr, cv::Mat& outputCensus) {
+bool GpuCensusTransform::process(const cv::Mat& inputBgr, cv::Mat& output) {
     auto& impl = *m_impl;
     if (!impl.initialized) {
-        LOG_ERROR("Census GPU 未初始化");
+        LOG_ERROR("GPU 变换未初始化");
         return false;
     }
     int w = inputBgr.cols, h = inputBgr.rows;
 
     if (!impl.resourcesCreated || impl.curWidth != w || impl.curHeight != h) {
+        // 清理旧资源
         if (impl.inputImage) vkDestroyImage(impl.device, impl.inputImage, nullptr);
         if (impl.inputImageMemory) vkFreeMemory(impl.device, impl.inputImageMemory, nullptr);
         if (impl.outputImage) vkDestroyImage(impl.device, impl.outputImage, nullptr);
@@ -462,6 +473,7 @@ bool GpuCensusTransform::process(const cv::Mat& inputBgr, cv::Mat& outputCensus)
             }
         }
 
+        // 初始化图像布局
         VkCommandBuffer cmd = impl.commandBuffers[0];
         vkResetCommandBuffer(cmd, 0);
         VkCommandBufferBeginInfo beginInfo{};
@@ -480,6 +492,7 @@ bool GpuCensusTransform::process(const cv::Mat& inputBgr, cv::Mat& outputCensus)
         vkQueueWaitIdle(impl.queue);
         vkResetCommandBuffer(cmd, 0);
 
+        // 更新描述符集
         VkDescriptorImageInfo inputInfo{};
         inputInfo.sampler = impl.sampler;
         inputInfo.imageView = impl.inputImageView;
@@ -501,7 +514,7 @@ bool GpuCensusTransform::process(const cv::Mat& inputBgr, cv::Mat& outputCensus)
         impl.currentFrame = 0;
         impl.currentStaging = 0;
         impl.resourcesCreated = true;
-        LOG_INFO("Census GPU 资源已创建（尺寸 {}x{}）", w, h);
+        LOG_INFO("GPU 变换资源已创建（尺寸 {}x{}）", w, h);
     }
 
     size_t imageSize = w * h * 4;
@@ -569,8 +582,8 @@ bool GpuCensusTransform::process(const cv::Mat& inputBgr, cv::Mat& outputCensus)
     vkQueueWaitIdle(impl.queue);
 
     vkMapMemory(impl.device, impl.stagingMemories[stagingIdx], 0, outputSize, 0, &mapped);
-    outputCensus.create(h, w, CV_16U);
-    memcpy(outputCensus.data, mapped, outputSize);
+    output.create(h, w, CV_16U);
+    memcpy(output.data, mapped, outputSize);
     vkUnmapMemory(impl.device, impl.stagingMemories[stagingIdx]);
 
     impl.currentFrame = nextFrameIdx;
@@ -583,6 +596,12 @@ void* GpuCensusTransform::getOutputImageView() const {
     if (!m_impl->initialized || !m_impl->resourcesCreated) return nullptr;
     return static_cast<void*>(m_impl->outputImageView);
 }
+
+void* GpuCensusTransform::getInputImageView() const {
+    if (!m_impl->initialized || !m_impl->resourcesCreated) return nullptr;
+    return static_cast<void*>(m_impl->inputImageView);
+}
+
 int GpuCensusTransform::getWidth() const { return m_impl->curWidth; }
 int GpuCensusTransform::getHeight() const { return m_impl->curHeight; }
 

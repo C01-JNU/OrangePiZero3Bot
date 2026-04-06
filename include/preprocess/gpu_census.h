@@ -1,16 +1,18 @@
 // gpu_census.h
-// Census 变换 GPU 实现 (Vulkan) - 动态创建资源，无硬编码
-// 最后更新: 2026-04-05
+// Census / Rank 变换 GPU 实现 (Vulkan) - 支持自适应阈值
+// 最后更新: 2026-04-06
+// 作者: C01-JNU & AI助手
 
 #pragma once
 
 #include <opencv2/core.hpp>
 #include <memory>
+#include "census.h"   // 引入 TransformType 枚举
 
 namespace stereo_depth::preprocess {
 
 /**
- * @brief GPU Census 变换类
+ * @brief GPU 实现的 Census / Rank 变换类
  */
 class GpuCensusTransform {
 public:
@@ -18,21 +20,22 @@ public:
     ~GpuCensusTransform();
 
     /**
-     * @brief 初始化 Vulkan 实例、设备、管线等（不创建图像资源）
+     * @brief 初始化 Vulkan 资源，并选择变换类型
      * @param windowWidth  窗口宽度（奇数）
      * @param windowHeight 窗口高度（奇数）
-     * @param adaptiveThreshold 自适应阈值
+     * @param adaptiveThreshold 自适应阈值（0 表示禁用）
+     * @param type 变换类型（CENSUS 或 RANK）
      * @return 成功返回 true
      */
-    bool init(int windowWidth, int windowHeight, int adaptiveThreshold);
+    bool init(int windowWidth, int windowHeight, int adaptiveThreshold, TransformType type);
 
     /**
-     * @brief 对 BGR 图像执行 Census 变换（动态创建/重建资源）
+     * @brief 对 BGR 图像执行变换
      * @param inputBgr 输入图像 (CV_8UC3)
-     * @param outputCensus 输出 Census 图 (CV_16U)
+     * @param output 输出变换图 (CV_16U)
      * @return 成功返回 true
      */
-    bool process(const cv::Mat& inputBgr, cv::Mat& outputCensus);
+    bool process(const cv::Mat& inputBgr, cv::Mat& output);
 
     /**
      * @brief 获取输出图像的 Vulkan 图像视图句柄
@@ -40,7 +43,20 @@ public:
      */
     void* getOutputImageView() const;
 
+    /**
+     * @brief 获取输入图像的 Vulkan 图像视图句柄（去噪后的彩色图）
+     * @return VkImageView 转换为 void*
+     */
+    void* getInputImageView() const;
+
+    /**
+     * @brief 获取当前输出图像的宽度
+     */
     int getWidth() const;
+
+    /**
+     * @brief 获取当前输出图像的高度
+     */
     int getHeight() const;
 
 private:
